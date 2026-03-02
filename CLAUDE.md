@@ -52,10 +52,23 @@ ddev exec php artisan route:clear
 
 ### 关键文件
 
-- `app/Http/Controllers/ApiController.php` — 唯一的业务控制器
+- `app/Http/Controllers/ApiController.php` — API 日志查询控制器
+- `app/Http/Controllers/AdminController.php` — 后台登录/登出控制器
+- `app/Http/Controllers/StatsController.php` — 统计仪表盘控制器
+- `app/Http/Middleware/AdminAuth.php` — 后台密码认证中间件
 - `app/Models/Log.php` — 日志模型（`logs` 表）
 - `app/Models/Token.php` — Token 模型（`tokens` 表）
 - `routes/api.php` — API 路由定义（`/api/log` 已禁用限流）
+- `routes/web.php` — Web 路由（后台登录与统计仪表盘）
+- `resources/views/admin/login.blade.php` — 登录页视图
+- `resources/views/admin/dashboard.blade.php` — 统计仪表盘视图（Tailwind CSS + Chart.js）
+
+### 后台统计
+
+- 路由：`/admin`（需认证）、`/admin/login`、`/admin/logout`
+- 认证方式：简单密码认证，密码通过 `ADMIN_PASSWORD` 环境变量配置
+- 仪表盘功能：Top 10 用户用量排行、模型使用分布、每日用量趋势
+- 支持 7/30/90 天时间范围切换
 
 ### 数据库
 
