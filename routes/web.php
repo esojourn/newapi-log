@@ -25,4 +25,6 @@ Route::post('/admin/logout', [AdminController::class, 'logout'])->name('admin.lo
 
 Route::middleware('admin')->group(function () {
     Route::get('/admin', [StatsController::class, 'dashboard'])->name('admin.dashboard');
+    Route::get('/admin/user/{tokenName}', [StatsController::class, 'userDetail'])->name('admin.user.detail');
+    Route::get('/admin/user/{tokenName}/logs', [StatsController::class, 'userLogs'])->name('admin.user.logs');
 });

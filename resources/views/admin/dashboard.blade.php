@@ -70,7 +70,11 @@
                         @foreach ($topUsers as $i => $user)
                             <tr class="hover:bg-gray-50">
                                 <td class="px-5 py-3 text-gray-500">{{ $i + 1 }}</td>
-                                <td class="px-5 py-3 font-medium text-gray-800">{{ $user->token_name }}</td>
+                                <td class="px-5 py-3 font-medium text-blue-600 hover:text-blue-800">
+                                    <a href="{{ route('admin.user.detail', ['tokenName' => $user->token_name]) }}">
+                                        {{ $user->token_name }}
+                                    </a>
+                                </td>
                                 <td class="px-5 py-3 text-right text-gray-700">{{ number_format($user->request_count) }}</td>
                                 <td class="px-5 py-3 text-right text-gray-700">{{ number_format($user->prompt_tokens) }}</td>
                                 <td class="px-5 py-3 text-right text-gray-700">{{ number_format($user->completion_tokens) }}</td>
