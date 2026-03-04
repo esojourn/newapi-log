@@ -262,6 +262,7 @@
                 plugins: {
                     legend: { position: 'top' },
                     tooltip: {
+                        filter: ctx => ctx.dataset.type === 'line' || ctx.raw > 0,
                         callbacks: {
                             label: ctx => {
                                 if (ctx.dataset.type === 'line') {
