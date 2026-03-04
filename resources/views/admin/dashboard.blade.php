@@ -63,6 +63,7 @@
                             <th class="text-right px-5 py-3 font-medium">Prompt Tokens</th>
                             <th class="text-right px-5 py-3 font-medium">Completion Tokens</th>
                             <th class="text-right px-5 py-3 font-medium">总 Tokens</th>
+                            <th class="text-right px-5 py-3 font-medium">金额</th>
                             <th class="text-left px-5 py-3 font-medium">主要模型</th>
                         </tr>
                     </thead>
@@ -79,6 +80,7 @@
                                 <td class="px-5 py-3 text-right text-gray-700">{{ number_format($user->prompt_tokens) }}</td>
                                 <td class="px-5 py-3 text-right text-gray-700">{{ number_format($user->completion_tokens) }}</td>
                                 <td class="px-5 py-3 text-right font-semibold text-gray-800">{{ number_format($user->total_tokens) }}</td>
+                                <td class="px-5 py-3 text-right text-gray-700">¥{{ number_format(round($user->total_quota / 500000, 4), 4) }}</td>
                                 <td class="px-5 py-3 text-gray-600">{{ $primaryModels[$user->token_name] ?? '-' }}</td>
                             </tr>
                         @endforeach

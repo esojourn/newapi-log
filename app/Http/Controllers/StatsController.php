@@ -43,6 +43,7 @@ class StatsController extends Controller
             ->selectRaw('SUM(prompt_tokens) as prompt_tokens')
             ->selectRaw('SUM(completion_tokens) as completion_tokens')
             ->selectRaw('SUM(prompt_tokens + completion_tokens) as total_tokens')
+            ->selectRaw('SUM(quota) as total_quota')
             ->orderByDesc('total_tokens')
             ->limit(10)
             ->get();
@@ -177,6 +178,34 @@ class StatsController extends Controller
             }
         }
 
+        // 每日模型金额分布（用于堆叠柱图）
+        $dailyModelTrend = DB::table('logs')
+            ->where('token_name', $tokenName)
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->groupBy('date', 'model_name')
+            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, model_name, SUM(quota) as daily_quota')
+            ->orderBy('date')
+            ->get();
+
+        // 收集出现的模型名（按总金额排序）
+        $modelAmounts = [];
+        foreach ($dailyModelTrend as $row) {
+            $modelAmounts[$row->model_name] = ($modelAmounts[$row->model_name] ?? 0) + $row->daily_quota;
+        }
+        arsort($modelAmounts);
+        $dailyModelNames = array_keys($modelAmounts);
+
+        // 整理为 { model_name: { date: amount, ... }, ... }
+        $dailyModelData = [];
+        foreach ($dailyModelNames as $model) {
+            $dailyModelData[$model] = array_fill_keys($dates, 0);
+        }
+        foreach ($dailyModelTrend as $row) {
+            if (isset($dailyModelData[$row->model_name][$row->date])) {
+                $dailyModelData[$row->model_name][$row->date] = $this->quotaToAmount($row->daily_quota);
+            }
+        }
+
         // 模型使用分布
         $modelDistribution = DB::table('logs')
             ->where('token_name', $tokenName)
@@ -218,6 +247,8 @@ class StatsController extends Controller
             'overview',
             'dates',
             'dailyData',
+            'dailyModelData',
+            'dailyModelNames',
             'modelDistribution',
             'groupDistribution'
         ));

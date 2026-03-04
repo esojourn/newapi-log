@@ -220,43 +220,65 @@
             });
         });
 
-        // 消费趋势图
+        // 消费趋势图（堆叠柱图 + 折线）
         const dailyData = @json($dailyData);
+        const dailyModelData = @json($dailyModelData);
+        const dailyModelNames = @json($dailyModelNames);
         const dates = @json($dates);
 
-        new Chart(document.getElementById('trendChart'), {
+        // 为每个模型生成一个堆叠柱图 dataset
+        const modelBarDatasets = dailyModelNames.map((model, i) => ({
+            label: model,
+            data: Object.values(dailyModelData[model] || {}),
+            backgroundColor: COLORS[i % COLORS.length],
+            stack: 'amount',
+            yAxisID: 'y',
+            order: 2
+        }));
+
+        // 请求数折线 dataset
+        const requestLineDataset = {
+            label: '请求数',
+            data: Object.values(dailyData.requests),
+            borderColor: '#3B82F6',
+            backgroundColor: 'transparent',
             type: 'line',
+            tension: 0.3,
+            yAxisID: 'y1',
+            order: 1,
+            pointRadius: 2,
+            borderWidth: 2
+        };
+
+        new Chart(document.getElementById('trendChart'), {
+            type: 'bar',
             data: {
                 labels: dates,
-                datasets: [
-                    {
-                        label: '消费金额 (¥)',
-                        data: Object.values(dailyData.amounts),
-                        borderColor: '#10B981',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        fill: true,
-                        tension: 0.3,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: '请求数',
-                        data: Object.values(dailyData.requests),
-                        borderColor: '#3B82F6',
-                        backgroundColor: 'transparent',
-                        tension: 0.3,
-                        yAxisID: 'y1'
-                    }
-                ]
+                datasets: [...modelBarDatasets, requestLineDataset]
             },
             options: {
                 responsive: true,
                 interaction: { mode: 'index', intersect: false },
-                plugins: { legend: { position: 'top' } },
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => {
+                                if (ctx.dataset.type === 'line') {
+                                    return `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}`;
+                                }
+                                return `${ctx.dataset.label}: ¥${ctx.raw.toFixed(4)}`;
+                            }
+                        }
+                    }
+                },
                 scales: {
+                    x: { stacked: true },
                     y: {
                         type: 'linear',
                         display: true,
                         position: 'left',
+                        stacked: true,
                         title: { display: true, text: '金额 (¥)' }
                     },
                     y1: {
