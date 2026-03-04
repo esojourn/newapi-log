@@ -19,8 +19,8 @@ class StatsController extends Controller
     public function dashboard(Request $request)
     {
         $days = (int) $request->query('days', 7);
-        if (!in_array($days, [7, 30, 90])) {
-            $days = 7;
+        if (!in_array($days, [1, 3, 7, 30, 90])) {
+            $days = 1;
         }
 
         $since = Carbon::now()->subDays($days)->startOfDay();
@@ -120,8 +120,8 @@ class StatsController extends Controller
     public function userDetail(Request $request, string $tokenName)
     {
         $days = (int) $request->query('days', 7);
-        if (!in_array($days, [7, 30, 90])) {
-            $days = 7;
+        if (!in_array($days, [1, 3,7, 30, 90])) {
+            $days = 1;
         }
 
         $since = Carbon::now()->subDays($days)->startOfDay();

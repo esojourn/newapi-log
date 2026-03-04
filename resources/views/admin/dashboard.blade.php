@@ -15,7 +15,7 @@
             <div class="flex items-center gap-3">
                 {{-- 时间范围切换 --}}
                 <div class="flex rounded-md shadow-sm">
-                    @foreach ([7, 30, 90] as $d)
+                    @foreach ([1, 3, 7, 30, 90] as $d)
                         <a href="?days={{ $d }}"
                             class="px-3 py-1.5 text-sm border {{ $days == $d ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' }} {{ $d == 7 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
                             {{ $d }}天
