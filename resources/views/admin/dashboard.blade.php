@@ -107,7 +107,31 @@
         {{-- 折线图：每日用量趋势 --}}
         <div class="bg-white rounded-lg shadow p-5">
             <h2 class="text-lg font-semibold text-gray-800 mb-4">每日用量趋势（Top 10 用户）</h2>
-            <canvas id="lineChart"></canvas>
+            <div class="relative" style="height: 300px;">
+                <canvas id="lineChart"></canvas>
+            </div>
+
+            {{-- 每日金额表格 --}}
+            <div class="mt-6 overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 text-gray-600">
+                        <tr>
+                            <th class="text-left px-4 py-2 font-medium">日期</th>
+                            <th class="text-right px-4 py-2 font-medium">每日总金额</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                        @foreach ($dates as $date)
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-2 text-gray-700">{{ $date }}</td>
+                                <td class="px-4 py-2 text-right text-gray-700">
+                                    ¥{{ number_format(round(($dailyAmounts[$date]->daily_quota ?? 0) / 500000, 4), 4) }}
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -180,6 +204,7 @@
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 plugins: { legend: { position: 'top' } },
                 scales: {
                     y: { ticks: { callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v } }

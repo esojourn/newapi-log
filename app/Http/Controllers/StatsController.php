@@ -85,6 +85,15 @@ class StatsController extends Controller
             ->orderBy('date')
             ->get();
 
+        // 每日总金额
+        $dailyAmounts = DB::table('logs')
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->groupBy('date')
+            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, SUM(quota) as daily_quota')
+            ->orderBy('date')
+            ->get()
+            ->keyBy('date');
+
         // 整理每日趋势数据为图表格式
         $dates = [];
         $current = $since->copy();
@@ -112,7 +121,8 @@ class StatsController extends Controller
             'modelDistribution',
             'dates',
             'dailyData',
-            'topUserNames'
+            'topUserNames',
+            'dailyAmounts'
         ));
     }
 
