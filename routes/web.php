@@ -20,7 +20,7 @@ Route::get('/', function () {
 });
 
 Route::get('/admin/login', [AdminController::class, 'showLogin'])->name('admin.login');
-Route::post('/admin/login', [AdminController::class, 'login']);
+Route::post('/admin/login', [AdminController::class, 'login'])->middleware('throttle:5,1');
 Route::post('/admin/logout', [AdminController::class, 'logout'])->name('admin.logout');
 
 Route::middleware('admin')->group(function () {

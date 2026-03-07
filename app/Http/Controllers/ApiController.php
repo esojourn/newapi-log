@@ -37,16 +37,6 @@ class ApiController extends Controller
         $total = $query->count();
         $data = $query->paginate($pageSize, ['id', 'created_at', 'model_name', 'prompt_tokens', 'completion_tokens', 'quota'], 'page', $page);
 
-        // 临时调试：在响应中附加调试信息
-        $response = $data->toArray();
-        $response['_debug'] = [
-            'token_name' => $token_data->name,
-            'page' => $page,
-            'pageSize' => $pageSize,
-            'total_count' => $total,
-            'data_count' => count($data->items()),
-        ];
-
-        return response()->json($response);
+        return response()->json($data->toArray());
     }
 }

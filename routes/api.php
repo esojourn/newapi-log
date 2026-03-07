@@ -19,4 +19,4 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
 
-Route::get('/log', [ApiController::class, 'getLogs'])->withoutMiddleware('throttle:api');
+Route::get('/log', [ApiController::class, 'getLogs'])->middleware('throttle:60,1');
