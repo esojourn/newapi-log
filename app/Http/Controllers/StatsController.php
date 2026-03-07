@@ -427,6 +427,8 @@ class StatsController extends Controller
                 return $item;
             });
 
+        $isPublic = true;
+
         return view('admin.user-detail', compact(
             'tokenName',
             'days',
@@ -440,7 +442,7 @@ class StatsController extends Controller
             'balance',
             'isPublic',
             'apikey'
-        ))->with('isPublic', true)->with('apikey', $apikey);
+        ));
     }
 
     /**
