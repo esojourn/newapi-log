@@ -17,11 +17,13 @@
     <nav class="bg-white shadow">
         <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
             <div class="flex items-center gap-3">
+                @if(!isset($isPublic) || !$isPublic)
                 <a href="{{ route('admin.dashboard') }}" class="text-gray-500 hover:text-gray-700">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
                     </svg>
                 </a>
+                @endif
                 <h1 class="text-xl font-bold text-gray-800">{{ $tokenName }}</h1>
             </div>
             <div class="flex items-center gap-3">
@@ -34,11 +36,13 @@
                         </a>
                     @endforeach
                 </div>
+                @if(!isset($isPublic) || !$isPublic)
                 {{-- 登出 --}}
                 <form method="POST" action="{{ route('admin.logout') }}" class="inline">
                     @csrf
                     <button type="submit" class="text-sm text-gray-500 hover:text-red-600 transition">登出</button>
                 </form>
+                @endif
             </div>
         </div>
     </nav>
@@ -59,7 +63,7 @@
         {{-- 统计 Tab --}}
         <div id="stats-tab" class="tab-content active space-y-6">
             {{-- 总览卡片 --}}
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
                 <div class="bg-white rounded-lg shadow p-5">
                     <div class="text-sm text-gray-500">总请求数</div>
                     <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_requests) }}</div>
@@ -67,6 +71,10 @@
                 <div class="bg-white rounded-lg shadow p-5">
                     <div class="text-sm text-gray-500">消费金额</div>
                     <div class="text-2xl font-bold text-green-600 mt-1">¥{{ number_format($overview->total_amount, 4) }}</div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-5">
+                    <div class="text-sm text-gray-500">账户余额</div>
+                    <div class="text-2xl font-bold text-blue-600 mt-1">{{ $balance ?? '-' }}</div>
                 </div>
                 <div class="bg-white rounded-lg shadow p-5">
                     <div class="text-sm text-gray-500">Prompt Tokens</div>
@@ -348,13 +356,14 @@
         let currentPage = 1;
         let pageSize = 20;
         const tokenName = @json($tokenName);
+        const apiUrl = @json(isset($isPublic) && $isPublic ? "/user/{$apikey}/logs" : "/admin/user/{$tokenName}/logs");
 
         async function loadLogs() {
             const tbody = document.getElementById('logsTableBody');
             tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">加载中...</td></tr>';
 
             try {
-                const res = await fetch(`/admin/user/${encodeURIComponent(tokenName)}/logs?page=${currentPage}&pageSize=${pageSize}`);
+                const res = await fetch(`${apiUrl}?page=${currentPage}&pageSize=${pageSize}`);
                 const data = await res.json();
 
                 logsLoaded = true;

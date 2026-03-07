@@ -28,3 +28,6 @@ Route::middleware('admin')->group(function () {
     Route::get('/admin/user/{tokenName}', [StatsController::class, 'userDetail'])->name('admin.user.detail');
     Route::get('/admin/user/{tokenName}/logs', [StatsController::class, 'userLogs'])->name('admin.user.logs');
 });
+
+Route::get('/user/{apikey}', [StatsController::class, 'publicUserDetail'])->name('user.detail');
+Route::get('/user/{apikey}/logs', [StatsController::class, 'publicUserLogs'])->name('user.logs');
