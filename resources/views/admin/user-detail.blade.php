@@ -70,7 +70,7 @@
                 </div>
                 <div class="bg-white rounded-lg shadow p-5">
                     <div class="text-sm text-gray-500">消费金额</div>
-                    <div class="text-2xl font-bold text-green-600 mt-1">¥{{ number_format($overview->total_amount, 4) }}</div>
+                    <div class="text-2xl font-bold text-green-600 mt-1">${{ number_format($overview->total_amount, 4) }}</div>
                 </div>
                 <div class="bg-white rounded-lg shadow p-5">
                     <div class="text-sm text-gray-500">账户余额</div>
@@ -112,7 +112,7 @@
                                     <tr class="hover:bg-gray-50">
                                         <td class="px-3 py-2 text-gray-800">{{ $model->model_name }}</td>
                                         <td class="px-3 py-2 text-right text-gray-700">{{ number_format($model->request_count) }}</td>
-                                        <td class="px-3 py-2 text-right text-green-600">¥{{ number_format($model->total_amount, 4) }}</td>
+                                        <td class="px-3 py-2 text-right text-green-600">${{ number_format($model->total_amount, 4) }}</td>
                                     </tr>
                                 @endforeach
                             </tbody>
@@ -141,7 +141,7 @@
                                         <tr class="hover:bg-gray-50">
                                             <td class="px-3 py-2 text-gray-800">{{ $group->group }}</td>
                                             <td class="px-3 py-2 text-right text-gray-700">{{ number_format($group->request_count) }}</td>
-                                            <td class="px-3 py-2 text-right text-green-600">¥{{ number_format($group->total_amount, 4) }}</td>
+                                            <td class="px-3 py-2 text-right text-green-600">${{ number_format($group->total_amount, 4) }}</td>
                                         </tr>
                                     @endforeach
                                 </tbody>
@@ -276,7 +276,7 @@
                                 if (ctx.dataset.type === 'line') {
                                     return `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}`;
                                 }
-                                return `${ctx.dataset.label}: ¥${ctx.raw.toFixed(4)}`;
+                                return `${ctx.dataset.label}: $${ctx.raw.toFixed(4)}`;
                             }
                         }
                     }
@@ -288,7 +288,7 @@
                         display: true,
                         position: 'left',
                         stacked: true,
-                        title: { display: true, text: '金额 (¥)' }
+                        title: { display: true, text: '金额 ($)' }
                     },
                     y1: {
                         type: 'linear',
@@ -318,7 +318,7 @@
                     legend: { position: 'right' },
                     tooltip: {
                         callbacks: {
-                            label: ctx => `${ctx.label}: ¥${ctx.raw.toFixed(4)}`
+                            label: ctx => `${ctx.label}: $${ctx.raw.toFixed(4)}`
                         }
                     }
                 }
@@ -343,7 +343,7 @@
                     legend: { position: 'right' },
                     tooltip: {
                         callbacks: {
-                            label: ctx => `${ctx.label}: ¥${ctx.raw.toFixed(4)}`
+                            label: ctx => `${ctx.label}: $${ctx.raw.toFixed(4)}`
                         }
                     }
                 }
@@ -386,7 +386,7 @@
                         <td class="px-4 py-3 text-gray-800 font-medium">${log.model_name}</td>
                         <td class="px-4 py-3 text-right text-gray-700">${log.prompt_tokens.toLocaleString()}</td>
                         <td class="px-4 py-3 text-right text-gray-700">${log.completion_tokens.toLocaleString()}</td>
-                        <td class="px-4 py-3 text-right text-green-600 font-medium">¥${log.amount.toFixed(4)}</td>
+                        <td class="px-4 py-3 text-right text-green-600 font-medium">$${log.amount.toFixed(4)}</td>
                     </tr>
                 `).join('');
             } catch (err) {

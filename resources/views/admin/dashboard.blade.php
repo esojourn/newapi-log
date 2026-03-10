@@ -17,7 +17,7 @@
                 <div class="flex rounded-md shadow-sm">
                     @foreach ([1, 3, 7, 30, 90] as $d)
                         <a href="?days={{ $d }}"
-                            class="px-3 py-1.5 text-sm border {{ $days == $d ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' }} {{ $d == 7 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
+                            class="px-3 py-1.5 text-sm border {{ $days == $d ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
                             {{ $d }}天
                         </a>
                     @endforeach
@@ -33,7 +33,7 @@
 
     <div class="max-w-7xl mx-auto px-4 py-6 space-y-6">
         {{-- 总览卡片 --}}
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div class="bg-white rounded-lg shadow p-5">
                 <div class="text-sm text-gray-500">总请求数</div>
                 <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_requests) }}</div>
@@ -41,6 +41,10 @@
             <div class="bg-white rounded-lg shadow p-5">
                 <div class="text-sm text-gray-500">总 Token 数</div>
                 <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_tokens) }}</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-5">
+                <div class="text-sm text-gray-500">总金额</div>
+                <div class="text-2xl font-bold text-gray-800 mt-1">${{ number_format($overview->total_amount, 4) }}</div>
             </div>
             <div class="bg-white rounded-lg shadow p-5">
                 <div class="text-sm text-gray-500">活跃用户数</div>
@@ -80,7 +84,7 @@
                                 <td class="px-5 py-3 text-right text-gray-700">{{ number_format($user->prompt_tokens) }}</td>
                                 <td class="px-5 py-3 text-right text-gray-700">{{ number_format($user->completion_tokens) }}</td>
                                 <td class="px-5 py-3 text-right font-semibold text-gray-800">{{ number_format($user->total_tokens) }}</td>
-                                <td class="px-5 py-3 text-right text-gray-700">¥{{ number_format(round($user->total_quota / 500000, 4), 4) }}</td>
+                                <td class="px-5 py-3 text-right text-gray-700">${{ number_format(round($user->total_quota / 500000, 4), 4) }}</td>
                                 <td class="px-5 py-3 text-gray-600">{{ $primaryModels[$user->token_name] ?? '-' }}</td>
                             </tr>
                         @endforeach
@@ -91,9 +95,9 @@
 
         {{-- 图表区域 --}}
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {{-- 柱状图：Top 10 用户 Token 用量 --}}
+            {{-- 混合图：Top 10 用户 Token 用量 + 金额曲线 --}}
             <div class="bg-white rounded-lg shadow p-5">
-                <h2 class="text-lg font-semibold text-gray-800 mb-4">用户 Token 用量对比</h2>
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">用户 Token 用量与金额对比</h2>
                 <canvas id="barChart"></canvas>
             </div>
 
@@ -125,7 +129,7 @@
                             <tr class="hover:bg-gray-50">
                                 <td class="px-4 py-2 text-gray-700">{{ $date }}</td>
                                 <td class="px-4 py-2 text-right text-gray-700">
-                                    ¥{{ number_format(round(($dailyAmounts[$date]->daily_quota ?? 0) / 500000, 4), 4) }}
+                                    ${{ number_format(round(($dailyAmounts[$date]->daily_quota ?? 0) / 500000, 4), 4) }}
                                 </td>
                             </tr>
                         @endforeach
@@ -141,7 +145,7 @@
             '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1'
         ];
 
-        // 柱状图
+        // 混合图：柱状图 + 折线图
         new Chart(document.getElementById('barChart'), {
             type: 'bar',
             data: {
@@ -151,20 +155,84 @@
                         label: 'Prompt Tokens',
                         data: @json($topUsers->pluck('prompt_tokens')),
                         backgroundColor: '#3B82F6',
+                        yAxisID: 'y',
                     },
                     {
                         label: 'Completion Tokens',
                         data: @json($topUsers->pluck('completion_tokens')),
                         backgroundColor: '#10B981',
+                        yAxisID: 'y',
+                    },
+                    {
+                        label: '消费金额 ($)',
+                        data: @json($topUsers->map(fn($u) => round($u->total_quota / 500000, 4))),
+                        type: 'line',
+                        borderColor: '#EF4444',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        yAxisID: 'y1',
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
                     }
                 ]
             },
             options: {
                 responsive: true,
-                plugins: { legend: { position: 'top' } },
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.dataset.yAxisID === 'y1') {
+                                    label += '$' + context.parsed.y.toFixed(4);
+                                } else {
+                                    const val = context.parsed.y;
+                                    label += val >= 1e6 ? (val/1e6).toFixed(1)+'M' : val >= 1e3 ? (val/1e3).toFixed(0)+'K' : val;
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
                 scales: {
                     x: { stacked: true },
-                    y: { stacked: true, ticks: { callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v } }
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        stacked: true,
+                        ticks: {
+                            callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v
+                        },
+                        title: {
+                            display: true,
+                            text: 'Tokens'
+                        }
+                    },
+                    y1: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        grid: {
+                            drawOnChartArea: false,
+                        },
+                        ticks: {
+                            callback: v => '$' + v.toFixed(2)
+                        },
+                        title: {
+                            display: true,
+                            text: '金额 ($)'
+                        }
+                    }
                 }
             }
         });

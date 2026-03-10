@@ -32,10 +32,13 @@ class StatsController extends Controller
             ->where('created_at', '>=', $sinceTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total_tokens')
+            ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
             ->selectRaw('COUNT(DISTINCT token_name) as active_users')
             ->first();
 
-        // Top 10 用户用量
+        $overview->total_amount = $this->quotaToAmount($overview->total_quota);
+
+        // Top 10 用户用量（按金额排序）
         $topUsers = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('token_name')
@@ -45,7 +48,7 @@ class StatsController extends Controller
             ->selectRaw('SUM(completion_tokens) as completion_tokens')
             ->selectRaw('SUM(prompt_tokens + completion_tokens) as total_tokens')
             ->selectRaw('SUM(quota) as total_quota')
-            ->orderByDesc('total_tokens')
+            ->orderByDesc('total_quota')
             ->limit(10)
             ->get();
 
@@ -81,7 +84,7 @@ class StatsController extends Controller
             ->where('created_at', '>=', $sinceTimestamp)
             ->whereIn('token_name', $topUserNames)
             ->groupBy('date', 'token_name')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, token_name, SUM(prompt_tokens + completion_tokens) as daily_tokens')
+            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, token_name, SUM(prompt_tokens + completion_tokens) as daily_tokens, SUM(quota) as daily_quota')
             ->orderBy('date')
             ->get();
 
@@ -104,12 +107,15 @@ class StatsController extends Controller
         }
 
         $dailyData = [];
+        $dailyAmountData = [];
         foreach ($topUserNames as $name) {
             $dailyData[$name] = array_fill_keys($dates, 0);
+            $dailyAmountData[$name] = array_fill_keys($dates, 0);
         }
         foreach ($dailyTrend as $row) {
             if (isset($dailyData[$row->token_name])) {
                 $dailyData[$row->token_name][$row->date] = (int) $row->daily_tokens;
+                $dailyAmountData[$row->token_name][$row->date] = $this->quotaToAmount($row->daily_quota);
             }
         }
 
@@ -121,6 +127,7 @@ class StatsController extends Controller
             'modelDistribution',
             'dates',
             'dailyData',
+            'dailyAmountData',
             'topUserNames',
             'dailyAmounts'
         ));
@@ -322,7 +329,7 @@ class StatsController extends Controller
         $tokenName = $token->name;
         $balance = $token->unlimited_quota
             ? '无限'
-            : '¥' . number_format($token->remain_quota / 500000, 4);
+            : '$' . number_format($token->remain_quota / 500000, 4);
 
         $days = (int) $request->query('days', 7);
         if (!in_array($days, [1, 3, 7, 30, 90])) {
