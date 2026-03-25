@@ -7,14 +7,18 @@
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <style>
-        .tab-btn.active { border-color: #3B82F6; color: #3B82F6; background-color: #EFF6FF; }
+        body { background-color: #ffffff; }
+        .alz-nav { background: white; border-bottom: 2px solid #1D93AB; box-shadow: 0 1px 3px rgba(29,147,171,0.1); }
+        .alz-btn-active { background-color: #1D93AB !important; color: white !important; border-color: #1D93AB !important; }
+        .alz-btn-day:hover { background-color: #e8f7fc !important; }
+        .tab-btn.active { border-color: #1D93AB; color: #1D93AB; background-color: #E7F8FF; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body class="min-h-screen" style="background-color:#ffffff;">
     {{-- 顶部导航 --}}
-    <nav class="bg-white shadow">
+    <nav class="alz-nav">
         <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
             <div class="flex items-center gap-3">
                 @if(!isset($isPublic) || !$isPublic)
@@ -31,7 +35,7 @@
                 <div class="flex rounded-md shadow-sm">
                     @foreach ([1, 3, 7, 30, 90] as $d)
                         <a href="?days={{ $d }}"
-                            class="px-3 py-1.5 text-sm border {{ $days == $d ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' }} {{ $d == 7 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
+                            class="px-3 py-1.5 text-sm border {{ $days == $d ? 'alz-btn-active' : 'bg-white text-gray-700 border-gray-300 alz-btn-day' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
                             {{ $d }}天
                         </a>
                     @endforeach
@@ -74,7 +78,7 @@
                 </div>
                 <div class="bg-white rounded-lg shadow p-5">
                     <div class="text-sm text-gray-500">账户余额</div>
-                    <div class="text-2xl font-bold text-blue-600 mt-1">{{ $balance ?? '-' }}</div>
+                    <div class="text-2xl font-bold mt-1" style="color:#1D93AB;">{{ $balance ?? '-' }}</div>
                 </div>
                 <div class="bg-white rounded-lg shadow p-5">
                     <div class="text-sm text-gray-500">Prompt Tokens</div>
@@ -209,8 +213,8 @@
 
     <script>
         const COLORS = [
-            '#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6',
-            '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1'
+            '#1D93AB', '#2DD4BF', '#0EA5E9', '#6366F1', '#8B5CF6',
+            '#A78BFA', '#F59E0B', '#10B981', '#EC4899', '#64748B'
         ];
 
         // Tab 切换
@@ -248,7 +252,7 @@
         const requestLineDataset = {
             label: '请求数',
             data: Object.values(dailyData.requests),
-            borderColor: '#3B82F6',
+            borderColor: '#6366F1',
             backgroundColor: 'transparent',
             type: 'line',
             tension: 0.3,
