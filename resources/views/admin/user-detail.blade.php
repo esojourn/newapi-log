@@ -14,12 +14,17 @@
         .tab-btn.active { border-color: #1D93AB; color: #1D93AB; background-color: #E7F8FF; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+        #trendChartContainer { min-height: 300px; }
+        @media (max-width: 640px) {
+            #trendChartContainer { min-height: 350px; }
+            #modelPieChart, #groupPieChart { max-height: 250px; }
+        }
     </style>
 </head>
 <body class="min-h-screen" style="background-color:#ffffff;">
     {{-- 顶部导航 --}}
     <nav class="alz-nav">
-        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2">
             <div class="flex items-center gap-3">
                 @if(!isset($isPublic) || !$isPublic)
                 <a href="{{ route('admin.dashboard') }}" class="text-gray-500 hover:text-gray-700">
@@ -35,7 +40,7 @@
                 <div class="flex rounded-md shadow-sm">
                     @foreach ([1, 3, 7, 30, 90] as $d)
                         <a href="?days={{ $d }}"
-                            class="px-3 py-1.5 text-sm border {{ $days == $d ? 'alz-btn-active' : 'bg-white text-gray-700 border-gray-300 alz-btn-day' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
+                            class="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm border {{ $days == $d ? 'alz-btn-active' : 'bg-white text-gray-700 border-gray-300 alz-btn-day' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
                             {{ $d }}天
                         </a>
                     @endforeach
@@ -51,7 +56,7 @@
         </div>
     </nav>
 
-    <div class="max-w-7xl mx-auto px-4 py-6 space-y-6">
+    <div class="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-6">
         {{-- Tab 切换 --}}
         <div class="border-b border-gray-200">
             <nav class="flex space-x-4">
@@ -67,39 +72,41 @@
         {{-- 统计 Tab --}}
         <div id="stats-tab" class="tab-content active space-y-6">
             {{-- 总览卡片 --}}
-            <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-                <div class="bg-white rounded-lg shadow p-5">
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">总请求数</div>
-                    <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_requests) }}</div>
+                    <div class="text-xl sm:text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_requests) }}</div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">消费金额</div>
-                    <div class="text-2xl font-bold text-green-600 mt-1">${{ number_format($overview->total_amount, 4) }}</div>
+                    <div class="text-xl sm:text-2xl font-bold text-green-600 mt-1">${{ number_format($overview->total_amount, 4) }}</div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">账户余额</div>
-                    <div class="text-2xl font-bold mt-1" style="color:#1D93AB;">{{ $balance ?? '-' }}</div>
+                    <div class="text-xl sm:text-2xl font-bold mt-1" style="color:#1D93AB;">{{ $balance ?? '-' }}</div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">Prompt Tokens</div>
-                    <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_prompt_tokens) }}</div>
+                    <div class="text-xl sm:text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_prompt_tokens) }}</div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5 col-span-2 md:col-span-1">
                     <div class="text-sm text-gray-500">Completion Tokens</div>
-                    <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_completion_tokens) }}</div>
+                    <div class="text-xl sm:text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_completion_tokens) }}</div>
                 </div>
             </div>
 
             {{-- 消费趋势图 --}}
-            <div class="bg-white rounded-lg shadow p-5">
+            <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                 <h2 class="text-lg font-semibold text-gray-800 mb-4">每日消费趋势</h2>
-                <canvas id="trendChart"></canvas>
+                <div id="trendChartContainer" style="position: relative;">
+                    <canvas id="trendChart"></canvas>
+                </div>
             </div>
 
             {{-- 模型和分组分布 --}}
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {{-- 模型使用分布 --}}
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <h2 class="text-lg font-semibold text-gray-800 mb-4">模型使用分布</h2>
                     <canvas id="modelPieChart" class="mb-4"></canvas>
                     <div class="overflow-x-auto">
@@ -125,7 +132,7 @@
                 </div>
 
                 {{-- 分组使用分布 --}}
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <h2 class="text-lg font-semibold text-gray-800 mb-4">分组使用分布</h2>
                     @if ($groupDistribution->isEmpty())
                         <div class="text-center text-gray-500 py-8">暂无分组数据</div>
@@ -175,12 +182,12 @@
                     <table class="w-full text-sm">
                         <thead class="bg-gray-50 text-gray-600">
                             <tr>
-                                <th class="text-left px-4 py-3 font-medium">时间</th>
-                                <th class="text-left px-4 py-3 font-medium">分组</th>
-                                <th class="text-left px-4 py-3 font-medium">模型</th>
-                                <th class="text-right px-4 py-3 font-medium">输入</th>
-                                <th class="text-right px-4 py-3 font-medium">输出</th>
-                                <th class="text-right px-4 py-3 font-medium">金额</th>
+                                <th class="text-left px-3 sm:px-4 py-3 font-medium">时间</th>
+                                <th class="text-left px-4 py-3 font-medium hidden sm:table-cell">分组</th>
+                                <th class="text-left px-3 sm:px-4 py-3 font-medium">模型</th>
+                                <th class="text-right px-4 py-3 font-medium hidden sm:table-cell">输入</th>
+                                <th class="text-right px-4 py-3 font-medium hidden sm:table-cell">输出</th>
+                                <th class="text-right px-3 sm:px-4 py-3 font-medium">金额</th>
                             </tr>
                         </thead>
                         <tbody id="logsTableBody" class="divide-y divide-gray-100">
@@ -191,7 +198,7 @@
                     </table>
                 </div>
                 {{-- 分页 --}}
-                <div class="px-5 py-4 border-t flex items-center justify-between">
+                <div class="px-4 sm:px-5 py-3 sm:py-4 border-t flex flex-col sm:flex-row items-center justify-between gap-2">
                     <div class="text-sm text-gray-500">
                         共 <span id="totalCount">0</span> 条记录
                     </div>
@@ -216,6 +223,7 @@
             '#1D93AB', '#2DD4BF', '#0EA5E9', '#6366F1', '#8B5CF6',
             '#A78BFA', '#F59E0B', '#10B981', '#EC4899', '#64748B'
         ];
+        const isMobile = window.innerWidth < 640;
 
         // Tab 切换
         document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -262,6 +270,39 @@
             borderWidth: 2
         };
 
+        // 柱顶总金额标签插件
+        const totalLabelPlugin = {
+            id: 'totalBarLabels',
+            afterDatasetsDraw(chart) {
+                const { ctx, data, scales: { x, y } } = chart;
+                const barDatasets = data.datasets.filter(ds => ds.type !== 'line');
+                if (barDatasets.length === 0) return;
+
+                const numPoints = data.labels.length;
+                ctx.save();
+                ctx.font = isMobile ? 'bold 9px sans-serif' : 'bold 11px sans-serif';
+                ctx.fillStyle = '#374151';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+
+                for (let i = 0; i < numPoints; i++) {
+                    // 天数多且屏幕窄时隔一个显示
+                    if (numPoints > 14 && chart.width < 500 && i % 2 !== 0) continue;
+                    let total = 0;
+                    barDatasets.forEach(ds => {
+                        const val = ds.data[i];
+                        if (typeof val === 'number') total += val;
+                    });
+                    if (total <= 0) continue;
+
+                    const xPos = x.getPixelForValue(i);
+                    const yPos = y.getPixelForValue(total);
+                    ctx.fillText('$' + total.toFixed(2), xPos, yPos - 4);
+                }
+                ctx.restore();
+            }
+        };
+
         new Chart(document.getElementById('trendChart'), {
             type: 'bar',
             data: {
@@ -270,9 +311,17 @@
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
                 plugins: {
-                    legend: { position: 'top' },
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            boxWidth: isMobile ? 8 : 40,
+                            font: { size: isMobile ? 10 : 12 },
+                            padding: isMobile ? 6 : 10
+                        }
+                    },
                     tooltip: {
                         filter: ctx => ctx.dataset.type === 'line' || ctx.raw > 0,
                         callbacks: {
@@ -302,7 +351,8 @@
                         grid: { drawOnChartArea: false }
                     }
                 }
-            }
+            },
+            plugins: [totalLabelPlugin]
         });
 
         // 模型饼图
@@ -319,7 +369,7 @@
             options: {
                 responsive: true,
                 plugins: {
-                    legend: { position: 'right' },
+                    legend: { position: isMobile ? 'bottom' : 'right' },
                     tooltip: {
                         callbacks: {
                             label: ctx => `${ctx.label}: $${ctx.raw.toFixed(4)}`
@@ -344,7 +394,7 @@
             options: {
                 responsive: true,
                 plugins: {
-                    legend: { position: 'right' },
+                    legend: { position: isMobile ? 'bottom' : 'right' },
                     tooltip: {
                         callbacks: {
                             label: ctx => `${ctx.label}: $${ctx.raw.toFixed(4)}`
@@ -385,12 +435,12 @@
 
                 tbody.innerHTML = data.data.map(log => `
                     <tr class="hover:bg-gray-50">
-                        <td class="px-4 py-3 text-gray-700 whitespace-nowrap">${log.created_at}</td>
-                        <td class="px-4 py-3 text-gray-700">${log.group || '-'}</td>
-                        <td class="px-4 py-3 text-gray-800 font-medium">${log.model_name}</td>
-                        <td class="px-4 py-3 text-right text-gray-700">${log.prompt_tokens.toLocaleString()}</td>
-                        <td class="px-4 py-3 text-right text-gray-700">${log.completion_tokens.toLocaleString()}</td>
-                        <td class="px-4 py-3 text-right text-green-600 font-medium">$${log.amount.toFixed(4)}</td>
+                        <td class="px-3 sm:px-4 py-2 sm:py-3 text-gray-700 whitespace-nowrap text-xs sm:text-sm">${log.created_at}</td>
+                        <td class="px-4 py-3 text-gray-700 hidden sm:table-cell">${log.group || '-'}</td>
+                        <td class="px-3 sm:px-4 py-2 sm:py-3 text-gray-800 font-medium text-xs sm:text-sm">${log.model_name}</td>
+                        <td class="px-4 py-3 text-right text-gray-700 hidden sm:table-cell">${log.prompt_tokens.toLocaleString()}</td>
+                        <td class="px-4 py-3 text-right text-gray-700 hidden sm:table-cell">${log.completion_tokens.toLocaleString()}</td>
+                        <td class="px-3 sm:px-4 py-2 sm:py-3 text-right text-green-600 font-medium text-xs sm:text-sm">$${log.amount.toFixed(4)}</td>
                     </tr>
                 `).join('');
             } catch (err) {
