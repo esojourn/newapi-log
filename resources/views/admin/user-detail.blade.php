@@ -17,7 +17,7 @@
         #trendChartContainer { min-height: 300px; }
         @media (max-width: 640px) {
             #trendChartContainer { min-height: 350px; }
-            #modelPieChart, #groupPieChart { max-height: 250px; }
+            #modelPieChart { max-height: 250px; }
         }
     </style>
 </head>
@@ -103,62 +103,29 @@
                 </div>
             </div>
 
-            {{-- 模型和分组分布 --}}
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {{-- 模型使用分布 --}}
-                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
-                    <h2 class="text-lg font-semibold text-gray-800 mb-4">模型使用分布</h2>
-                    <canvas id="modelPieChart" class="mb-4"></canvas>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-sm">
-                            <thead class="bg-gray-50 text-gray-600">
-                                <tr>
-                                    <th class="text-left px-3 py-2 font-medium">模型</th>
-                                    <th class="text-right px-3 py-2 font-medium">请求数</th>
-                                    <th class="text-right px-3 py-2 font-medium">金额</th>
+            {{-- 模型使用分布 --}}
+            <div class="bg-white rounded-lg shadow p-4 sm:p-5">
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">模型使用分布</h2>
+                <canvas id="modelPieChart" class="mb-4"></canvas>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50 text-gray-600">
+                            <tr>
+                                <th class="text-left px-3 py-2 font-medium">模型</th>
+                                <th class="text-right px-3 py-2 font-medium">请求数</th>
+                                <th class="text-right px-3 py-2 font-medium">金额</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            @foreach ($modelDistribution as $model)
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-3 py-2 text-gray-800">{{ $model->model_name }}</td>
+                                    <td class="px-3 py-2 text-right text-gray-700">{{ number_format($model->request_count) }}</td>
+                                    <td class="px-3 py-2 text-right text-green-600">${{ number_format($model->total_amount, 4) }}</td>
                                 </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-100">
-                                @foreach ($modelDistribution as $model)
-                                    <tr class="hover:bg-gray-50">
-                                        <td class="px-3 py-2 text-gray-800">{{ $model->model_name }}</td>
-                                        <td class="px-3 py-2 text-right text-gray-700">{{ number_format($model->request_count) }}</td>
-                                        <td class="px-3 py-2 text-right text-green-600">${{ number_format($model->total_amount, 4) }}</td>
-                                    </tr>
-                                @endforeach
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                {{-- 分组使用分布 --}}
-                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
-                    <h2 class="text-lg font-semibold text-gray-800 mb-4">分组使用分布</h2>
-                    @if ($groupDistribution->isEmpty())
-                        <div class="text-center text-gray-500 py-8">暂无分组数据</div>
-                    @else
-                        <canvas id="groupPieChart" class="mb-4"></canvas>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-sm">
-                                <thead class="bg-gray-50 text-gray-600">
-                                    <tr>
-                                        <th class="text-left px-3 py-2 font-medium">分组</th>
-                                        <th class="text-right px-3 py-2 font-medium">请求数</th>
-                                        <th class="text-right px-3 py-2 font-medium">金额</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-gray-100">
-                                    @foreach ($groupDistribution as $group)
-                                        <tr class="hover:bg-gray-50">
-                                            <td class="px-3 py-2 text-gray-800">{{ $group->group }}</td>
-                                            <td class="px-3 py-2 text-right text-gray-700">{{ number_format($group->request_count) }}</td>
-                                            <td class="px-3 py-2 text-right text-green-600">${{ number_format($group->total_amount, 4) }}</td>
-                                        </tr>
-                                    @endforeach
-                                </tbody>
-                            </table>
-                        </div>
-                    @endif
+                            @endforeach
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -183,7 +150,6 @@
                         <thead class="bg-gray-50 text-gray-600">
                             <tr>
                                 <th class="text-left px-3 sm:px-4 py-3 font-medium">时间</th>
-                                <th class="text-left px-4 py-3 font-medium hidden sm:table-cell">分组</th>
                                 <th class="text-left px-3 sm:px-4 py-3 font-medium">模型</th>
                                 <th class="text-right px-4 py-3 font-medium hidden sm:table-cell">输入</th>
                                 <th class="text-right px-4 py-3 font-medium hidden sm:table-cell">输出</th>
@@ -192,7 +158,7 @@
                         </thead>
                         <tbody id="logsTableBody" class="divide-y divide-gray-100">
                             <tr>
-                                <td colspan="6" class="px-4 py-8 text-center text-gray-500">加载中...</td>
+                                <td colspan="5" class="px-4 py-8 text-center text-gray-500">加载中...</td>
                             </tr>
                         </tbody>
                     </table>
@@ -379,32 +345,6 @@
             }
         });
 
-        // 分组饼图
-        @if (!$groupDistribution->isEmpty())
-        const groupData = @json($groupDistribution);
-        new Chart(document.getElementById('groupPieChart'), {
-            type: 'doughnut',
-            data: {
-                labels: groupData.map(g => g.group),
-                datasets: [{
-                    data: groupData.map(g => g.total_amount),
-                    backgroundColor: COLORS
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: { position: isMobile ? 'bottom' : 'right' },
-                    tooltip: {
-                        callbacks: {
-                            label: ctx => `${ctx.label}: $${ctx.raw.toFixed(4)}`
-                        }
-                    }
-                }
-            }
-        });
-        @endif
-
         // 日志分页
         let logsLoaded = false;
         let currentPage = 1;
@@ -414,7 +354,7 @@
 
         async function loadLogs() {
             const tbody = document.getElementById('logsTableBody');
-            tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">加载中...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">加载中...</td></tr>';
 
             try {
                 const res = await fetch(`${apiUrl}?page=${currentPage}&pageSize=${pageSize}`);
@@ -429,14 +369,13 @@
                 document.getElementById('nextBtn').disabled = data.page >= data.totalPages;
 
                 if (data.data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">暂无数据</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">暂无数据</td></tr>';
                     return;
                 }
 
                 tbody.innerHTML = data.data.map(log => `
                     <tr class="hover:bg-gray-50">
                         <td class="px-3 sm:px-4 py-2 sm:py-3 text-gray-700 whitespace-nowrap text-xs sm:text-sm">${log.created_at}</td>
-                        <td class="px-4 py-3 text-gray-700 hidden sm:table-cell">${log.group || '-'}</td>
                         <td class="px-3 sm:px-4 py-2 sm:py-3 text-gray-800 font-medium text-xs sm:text-sm">${log.model_name}</td>
                         <td class="px-4 py-3 text-right text-gray-700 hidden sm:table-cell">${log.prompt_tokens.toLocaleString()}</td>
                         <td class="px-4 py-3 text-right text-gray-700 hidden sm:table-cell">${log.completion_tokens.toLocaleString()}</td>
@@ -444,7 +383,7 @@
                     </tr>
                 `).join('');
             } catch (err) {
-                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-red-500">加载失败</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-red-500">加载失败</td></tr>';
             }
         }
 
