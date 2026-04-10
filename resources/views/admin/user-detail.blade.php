@@ -106,7 +106,9 @@
             {{-- 模型使用分布 --}}
             <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                 <h2 class="text-lg font-semibold text-gray-800 mb-4">模型使用分布</h2>
-                <canvas id="modelPieChart" class="mb-4"></canvas>
+                <div class="mb-4" style="max-height: 400px; display: flex; justify-content: center;">
+                    <canvas id="modelPieChart"></canvas>
+                </div>
                 <div class="overflow-x-auto">
                     <table class="w-full text-sm">
                         <thead class="bg-gray-50 text-gray-600">
