@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Http\Request;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\StatsController;
 
@@ -16,8 +17,18 @@ use App\Http\Controllers\StatsController;
 */
 
 Route::get('/', function () {
+    if (session('user_token_name')) {
+        return redirect('/usage');
+    }
     return view('welcome');
 });
+Route::post('/', [StatsController::class, 'authenticate'])->middleware('throttle:10,1');
+Route::get('/usage', [StatsController::class, 'usage'])->name('user.usage');
+Route::get('/usage/logs', [StatsController::class, 'usageLogs'])->name('user.usage.logs');
+Route::post('/signout', function (Request $request) {
+    $request->session()->forget(['user_api_key', 'user_token_name']);
+    return redirect('/');
+})->name('user.signout');
 
 Route::get('/admin/login', [AdminController::class, 'showLogin'])->name('admin.login');
 Route::post('/admin/login', [AdminController::class, 'login'])->middleware('throttle:5,1');

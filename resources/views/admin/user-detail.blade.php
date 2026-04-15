@@ -45,7 +45,13 @@
                         </a>
                     @endforeach
                 </div>
-                @if(!isset($isPublic) || !$isPublic)
+                @if(isset($isSession) && $isSession)
+                {{-- 切换 Key --}}
+                <form method="POST" action="{{ route('user.signout') }}" class="inline">
+                    @csrf
+                    <button type="submit" class="text-sm text-gray-500 hover:text-red-600 transition">切换 Key</button>
+                </form>
+                @elseif(!isset($isPublic) || !$isPublic)
                 {{-- 登出 --}}
                 <form method="POST" action="{{ route('admin.logout') }}" class="inline">
                     @csrf
@@ -352,7 +358,7 @@
         let currentPage = 1;
         let pageSize = 20;
         const tokenName = @json($tokenName);
-        const apiUrl = @json(isset($isPublic) && $isPublic ? "/user/{$apikey}/logs" : "/admin/user/{$tokenName}/logs");
+        const apiUrl = @json($logsUrl);
 
         async function loadLogs() {
             const tbody = document.getElementById('logsTableBody');

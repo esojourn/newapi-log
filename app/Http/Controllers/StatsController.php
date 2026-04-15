@@ -259,6 +259,8 @@ class StatsController extends Controller
                 return $item;
             });
 
+        $logsUrl = "/admin/user/{$tokenName}/logs";
+
         return view('admin.user-detail', compact(
             'tokenName',
             'days',
@@ -268,7 +270,8 @@ class StatsController extends Controller
             'dailyModelData',
             'dailyModelNames',
             'modelDistribution',
-            'groupDistribution'
+            'groupDistribution',
+            'logsUrl'
         ));
     }
 
@@ -312,6 +315,199 @@ class StatsController extends Controller
             'pageSize' => $pageSize,
             'totalPages' => (int) ceil($total / $pageSize),
         ]);
+    }
+
+    /**
+     * 首页 API Key 认证（POST /）
+     */
+    public function authenticate(Request $request)
+    {
+        $request->validate([
+            'api_key' => 'required|string',
+        ]);
+
+        $apikey = trim($request->input('api_key'));
+        $processedKey = substr($apikey, 3);
+        $token = Token::where('key', $processedKey)->first();
+
+        if (!$token) {
+            return back()->withErrors(['api_key' => 'API Key 无效'])->withInput();
+        }
+
+        $request->session()->put('user_api_key', $apikey);
+        $request->session()->put('user_token_name', $token->name);
+
+        return redirect('/usage');
+    }
+
+    /**
+     * 用户使用详情页面（Session 认证，GET /usage）
+     */
+    public function usage(Request $request)
+    {
+        $tokenName = session('user_token_name');
+        if (!$tokenName) {
+            return redirect('/');
+        }
+
+        $apikey = session('user_api_key');
+        $processedKey = substr($apikey, 3);
+        $token = Token::where('key', $processedKey)->first();
+
+        if (!$token) {
+            $request->session()->forget(['user_api_key', 'user_token_name']);
+            return redirect('/');
+        }
+
+        $balance = $token->unlimited_quota
+            ? '无限'
+            : '$' . number_format($token->remain_quota / 500000, 4);
+
+        $days = (int) $request->query('days', 7);
+        if (!in_array($days, [1, 3, 7, 30, 90])) {
+            $days = 1;
+        }
+
+        $since = Carbon::now()->subDays($days)->startOfDay();
+        $sinceTimestamp = $since->timestamp;
+
+        $overview = DB::table('logs')
+            ->where('token_name', $tokenName)
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->selectRaw('COUNT(*) as total_requests')
+            ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
+            ->selectRaw('COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens')
+            ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens')
+            ->first();
+
+        $overview->total_amount = $this->quotaToAmount($overview->total_quota);
+
+        $dailyTrend = DB::table('logs')
+            ->where('token_name', $tokenName)
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->groupBy('date')
+            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date')
+            ->selectRaw('SUM(quota) as daily_quota')
+            ->selectRaw('SUM(prompt_tokens) as daily_prompt_tokens')
+            ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
+            ->selectRaw('COUNT(*) as daily_requests')
+            ->orderBy('date')
+            ->get();
+
+        $dates = [];
+        $current = $since->copy();
+        $now = Carbon::now();
+        while ($current->lte($now)) {
+            $dates[] = $current->format('Y-m-d');
+            $current->addDay();
+        }
+
+        $dailyData = [
+            'amounts' => array_fill_keys($dates, 0),
+            'requests' => array_fill_keys($dates, 0),
+            'prompt_tokens' => array_fill_keys($dates, 0),
+            'completion_tokens' => array_fill_keys($dates, 0),
+        ];
+
+        foreach ($dailyTrend as $row) {
+            if (isset($dailyData['amounts'][$row->date])) {
+                $dailyData['amounts'][$row->date] = $this->quotaToAmount($row->daily_quota);
+                $dailyData['requests'][$row->date] = (int) $row->daily_requests;
+                $dailyData['prompt_tokens'][$row->date] = (int) $row->daily_prompt_tokens;
+                $dailyData['completion_tokens'][$row->date] = (int) $row->daily_completion_tokens;
+            }
+        }
+
+        $dailyModelTrend = DB::table('logs')
+            ->where('token_name', $tokenName)
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->groupBy('date', 'model_name')
+            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, model_name, SUM(quota) as daily_quota')
+            ->orderBy('date')
+            ->get();
+
+        $modelAmounts = [];
+        foreach ($dailyModelTrend as $row) {
+            $modelAmounts[$row->model_name] = ($modelAmounts[$row->model_name] ?? 0) + $row->daily_quota;
+        }
+        arsort($modelAmounts);
+        $dailyModelNames = array_keys($modelAmounts);
+
+        $dailyModelData = [];
+        foreach ($dailyModelNames as $model) {
+            $dailyModelData[$model] = array_fill_keys($dates, 0);
+        }
+        foreach ($dailyModelTrend as $row) {
+            if (isset($dailyModelData[$row->model_name][$row->date])) {
+                $dailyModelData[$row->model_name][$row->date] = $this->quotaToAmount($row->daily_quota);
+            }
+        }
+
+        $modelDistribution = DB::table('logs')
+            ->where('token_name', $tokenName)
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->groupBy('model_name')
+            ->selectRaw('model_name')
+            ->selectRaw('SUM(quota) as total_quota')
+            ->selectRaw('COUNT(*) as request_count')
+            ->selectRaw('SUM(prompt_tokens + completion_tokens) as total_tokens')
+            ->orderByDesc('total_quota')
+            ->limit(10)
+            ->get()
+            ->map(function ($item) {
+                $item->total_amount = $this->quotaToAmount($item->total_quota);
+                return $item;
+            });
+
+        $groupDistribution = DB::table('logs')
+            ->where('token_name', $tokenName)
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->whereNotNull('group')
+            ->where('group', '!=', '')
+            ->groupBy('group')
+            ->selectRaw('`group`')
+            ->selectRaw('SUM(quota) as total_quota')
+            ->selectRaw('COUNT(*) as request_count')
+            ->orderByDesc('total_quota')
+            ->limit(10)
+            ->get()
+            ->map(function ($item) {
+                $item->total_amount = $this->quotaToAmount($item->total_quota);
+                return $item;
+            });
+
+        $isPublic = true;
+        $isSession = true;
+        $logsUrl = '/usage/logs';
+
+        return view('admin.user-detail', compact(
+            'tokenName',
+            'days',
+            'overview',
+            'dates',
+            'dailyData',
+            'dailyModelData',
+            'dailyModelNames',
+            'modelDistribution',
+            'groupDistribution',
+            'balance',
+            'isPublic',
+            'isSession',
+            'logsUrl'
+        ));
+    }
+
+    /**
+     * 用户日志 API（Session 认证，GET /usage/logs）
+     */
+    public function usageLogs(Request $request)
+    {
+        $tokenName = session('user_token_name');
+        if (!$tokenName) {
+            return response()->json(['error' => '未认证'], 401);
+        }
+
+        return $this->userLogs($request, $tokenName);
     }
 
     /**
@@ -445,6 +641,7 @@ class StatsController extends Controller
             });
 
         $isPublic = true;
+        $logsUrl = "/user/{$apikey}/logs";
 
         return view('admin.user-detail', compact(
             'tokenName',
@@ -458,7 +655,8 @@ class StatsController extends Controller
             'groupDistribution',
             'balance',
             'isPublic',
-            'apikey'
+            'apikey',
+            'logsUrl'
         ));
     }
 
