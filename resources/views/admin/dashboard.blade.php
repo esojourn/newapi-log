@@ -6,10 +6,21 @@
     <title>统计仪表盘 - API Log</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <style>
+        body { background-color: #E7F8FF; }
+        .alz-nav { background: white; border-bottom: 2px solid #1D93AB; box-shadow: 0 1px 3px rgba(29,147,171,0.1); }
+        .alz-btn-active { background-color: #1D93AB !important; color: white !important; border-color: #1D93AB !important; }
+        .alz-btn-day:hover { background-color: #e8f7fc !important; }
+        .alz-thead { background-color: #f0fafc; color: #0f5a6b; }
+        .alz-tr:hover { background-color: #e8f7fc; }
+        .alz-link { color: #1D93AB; }
+        .alz-link:hover { color: #0f5a6b; }
+        .alz-divider { border-color: #d0eff5; }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body class="min-h-screen">
     {{-- 顶部导航 --}}
-    <nav class="bg-white shadow">
+    <nav class="alz-nav">
         <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
             <h1 class="text-xl font-bold text-gray-800">API 用量统计</h1>
             <div class="flex items-center gap-3">
@@ -17,7 +28,7 @@
                 <div class="flex rounded-md shadow-sm">
                     @foreach ([1, 3, 7, 30, 90] as $d)
                         <a href="?days={{ $d }}"
-                            class="px-3 py-1.5 text-sm border {{ $days == $d ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
+                            class="px-3 py-1.5 text-sm border {{ $days == $d ? 'alz-btn-active' : 'bg-white text-gray-700 border-gray-300 alz-btn-day' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
                             {{ $d }}天
                         </a>
                     @endforeach
@@ -59,7 +70,7 @@
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
-                    <thead class="bg-gray-50 text-gray-600">
+                    <thead class="alz-thead">
                         <tr>
                             <th class="text-left px-5 py-3 font-medium">#</th>
                             <th class="text-left px-5 py-3 font-medium">用户</th>
@@ -71,11 +82,11 @@
                             <th class="text-left px-5 py-3 font-medium">主要模型</th>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-gray-100">
+                    <tbody class="divide-y alz-divider">
                         @foreach ($topUsers as $i => $user)
-                            <tr class="hover:bg-gray-50">
+                            <tr class="alz-tr">
                                 <td class="px-5 py-3 text-gray-500">{{ $i + 1 }}</td>
-                                <td class="px-5 py-3 font-medium text-blue-600 hover:text-blue-800">
+                                <td class="px-5 py-3 font-medium alz-link">
                                     <a href="{{ route('admin.user.detail', ['tokenName' => $user->token_name]) }}">
                                         {{ $user->token_name }}
                                     </a>
@@ -118,15 +129,15 @@
             {{-- 每日金额表格 --}}
             <div class="mt-6 overflow-x-auto">
                 <table class="w-full text-sm">
-                    <thead class="bg-gray-50 text-gray-600">
+                    <thead class="alz-thead">
                         <tr>
                             <th class="text-left px-4 py-2 font-medium">日期</th>
                             <th class="text-right px-4 py-2 font-medium">每日总金额</th>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-gray-100">
+                    <tbody class="divide-y alz-divider">
                         @foreach ($dates as $date)
-                            <tr class="hover:bg-gray-50">
+                            <tr class="alz-tr">
                                 <td class="px-4 py-2 text-gray-700">{{ $date }}</td>
                                 <td class="px-4 py-2 text-right text-gray-700">
                                     ${{ number_format(round(($dailyAmounts[$date]->daily_quota ?? 0) / 500000, 4), 4) }}
@@ -141,8 +152,8 @@
 
     <script>
         const COLORS = [
-            '#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6',
-            '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1'
+            '#1D93AB', '#2DD4BF', '#0EA5E9', '#6366F1', '#8B5CF6',
+            '#A78BFA', '#F59E0B', '#10B981', '#EC4899', '#64748B'
         ];
 
         // 混合图：柱状图 + 折线图
@@ -154,20 +165,20 @@
                     {
                         label: 'Prompt Tokens',
                         data: @json($topUsers->pluck('prompt_tokens')),
-                        backgroundColor: '#3B82F6',
+                        backgroundColor: '#1D93AB',
                         yAxisID: 'y',
                     },
                     {
                         label: 'Completion Tokens',
                         data: @json($topUsers->pluck('completion_tokens')),
-                        backgroundColor: '#10B981',
+                        backgroundColor: '#64C8D8',
                         yAxisID: 'y',
                     },
                     {
                         label: '消费金额 ($)',
                         data: @json($topUsers->map(fn($u) => round($u->total_quota / 500000, 4))),
                         type: 'line',
-                        borderColor: '#EF4444',
+                        borderColor: '#6366F1',
                         backgroundColor: 'transparent',
                         borderWidth: 2,
                         tension: 0.3,

@@ -7,15 +7,24 @@
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <style>
-        .tab-btn.active { border-color: #3B82F6; color: #3B82F6; background-color: #EFF6FF; }
+        body { background-color: #ffffff; }
+        .alz-nav { background: white; border-bottom: 2px solid #1D93AB; box-shadow: 0 1px 3px rgba(29,147,171,0.1); }
+        .alz-btn-active { background-color: #1D93AB !important; color: white !important; border-color: #1D93AB !important; }
+        .alz-btn-day:hover { background-color: #e8f7fc !important; }
+        .tab-btn.active { border-color: #1D93AB; color: #1D93AB; background-color: #E7F8FF; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+        #trendChartContainer { min-height: 300px; }
+        @media (max-width: 640px) {
+            #trendChartContainer { min-height: 350px; }
+            #modelPieChart { max-height: 250px; }
+        }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body class="min-h-screen" style="background-color:#ffffff;">
     {{-- 顶部导航 --}}
-    <nav class="bg-white shadow">
-        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+    <nav class="alz-nav">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2">
             <div class="flex items-center gap-3">
                 @if(!isset($isPublic) || !$isPublic)
                 <a href="{{ route('admin.dashboard') }}" class="text-gray-500 hover:text-gray-700">
@@ -31,12 +40,18 @@
                 <div class="flex rounded-md shadow-sm">
                     @foreach ([1, 3, 7, 30, 90] as $d)
                         <a href="?days={{ $d }}"
-                            class="px-3 py-1.5 text-sm border {{ $days == $d ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' }} {{ $d == 7 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
+                            class="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm border {{ $days == $d ? 'alz-btn-active' : 'bg-white text-gray-700 border-gray-300 alz-btn-day' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
                             {{ $d }}天
                         </a>
                     @endforeach
                 </div>
-                @if(!isset($isPublic) || !$isPublic)
+                @if(isset($isSession) && $isSession)
+                {{-- 切换 Key --}}
+                <form method="POST" action="{{ route('user.signout') }}" class="inline">
+                    @csrf
+                    <button type="submit" class="text-sm text-gray-500 hover:text-red-600 transition">切换 Key</button>
+                </form>
+                @elseif(!isset($isPublic) || !$isPublic)
                 {{-- 登出 --}}
                 <form method="POST" action="{{ route('admin.logout') }}" class="inline">
                     @csrf
@@ -47,7 +62,7 @@
         </div>
     </nav>
 
-    <div class="max-w-7xl mx-auto px-4 py-6 space-y-6">
+    <div class="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-6">
         {{-- Tab 切换 --}}
         <div class="border-b border-gray-200">
             <nav class="flex space-x-4">
@@ -63,91 +78,62 @@
         {{-- 统计 Tab --}}
         <div id="stats-tab" class="tab-content active space-y-6">
             {{-- 总览卡片 --}}
-            <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-                <div class="bg-white rounded-lg shadow p-5">
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">总请求数</div>
-                    <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_requests) }}</div>
+                    <div class="text-xl sm:text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_requests) }}</div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">消费金额</div>
-                    <div class="text-2xl font-bold text-green-600 mt-1">${{ number_format($overview->total_amount, 4) }}</div>
+                    <div class="text-xl sm:text-2xl font-bold text-green-600 mt-1">${{ number_format($overview->total_amount, 4) }}</div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">账户余额</div>
-                    <div class="text-2xl font-bold text-blue-600 mt-1">{{ $balance ?? '-' }}</div>
+                    <div class="text-xl sm:text-2xl font-bold mt-1" style="color:#1D93AB;">{{ $balance ?? '-' }}</div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">Prompt Tokens</div>
-                    <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_prompt_tokens) }}</div>
+                    <div class="text-xl sm:text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_prompt_tokens) }}</div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-5">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5 col-span-2 md:col-span-1">
                     <div class="text-sm text-gray-500">Completion Tokens</div>
-                    <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_completion_tokens) }}</div>
+                    <div class="text-xl sm:text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_completion_tokens) }}</div>
                 </div>
             </div>
 
             {{-- 消费趋势图 --}}
-            <div class="bg-white rounded-lg shadow p-5">
+            <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                 <h2 class="text-lg font-semibold text-gray-800 mb-4">每日消费趋势</h2>
-                <canvas id="trendChart"></canvas>
+                <div id="trendChartContainer" style="position: relative;">
+                    <canvas id="trendChart"></canvas>
+                </div>
             </div>
 
-            {{-- 模型和分组分布 --}}
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {{-- 模型使用分布 --}}
-                <div class="bg-white rounded-lg shadow p-5">
-                    <h2 class="text-lg font-semibold text-gray-800 mb-4">模型使用分布</h2>
-                    <canvas id="modelPieChart" class="mb-4"></canvas>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-sm">
-                            <thead class="bg-gray-50 text-gray-600">
-                                <tr>
-                                    <th class="text-left px-3 py-2 font-medium">模型</th>
-                                    <th class="text-right px-3 py-2 font-medium">请求数</th>
-                                    <th class="text-right px-3 py-2 font-medium">金额</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-100">
-                                @foreach ($modelDistribution as $model)
-                                    <tr class="hover:bg-gray-50">
-                                        <td class="px-3 py-2 text-gray-800">{{ $model->model_name }}</td>
-                                        <td class="px-3 py-2 text-right text-gray-700">{{ number_format($model->request_count) }}</td>
-                                        <td class="px-3 py-2 text-right text-green-600">${{ number_format($model->total_amount, 4) }}</td>
-                                    </tr>
-                                @endforeach
-                            </tbody>
-                        </table>
-                    </div>
+            {{-- 模型使用分布 --}}
+            <div class="bg-white rounded-lg shadow p-4 sm:p-5">
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">模型使用分布</h2>
+                <div class="mb-4" style="max-height: 400px; display: flex; justify-content: center;">
+                    <canvas id="modelPieChart"></canvas>
                 </div>
-
-                {{-- 分组使用分布 --}}
-                <div class="bg-white rounded-lg shadow p-5">
-                    <h2 class="text-lg font-semibold text-gray-800 mb-4">分组使用分布</h2>
-                    @if ($groupDistribution->isEmpty())
-                        <div class="text-center text-gray-500 py-8">暂无分组数据</div>
-                    @else
-                        <canvas id="groupPieChart" class="mb-4"></canvas>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-sm">
-                                <thead class="bg-gray-50 text-gray-600">
-                                    <tr>
-                                        <th class="text-left px-3 py-2 font-medium">分组</th>
-                                        <th class="text-right px-3 py-2 font-medium">请求数</th>
-                                        <th class="text-right px-3 py-2 font-medium">金额</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-gray-100">
-                                    @foreach ($groupDistribution as $group)
-                                        <tr class="hover:bg-gray-50">
-                                            <td class="px-3 py-2 text-gray-800">{{ $group->group }}</td>
-                                            <td class="px-3 py-2 text-right text-gray-700">{{ number_format($group->request_count) }}</td>
-                                            <td class="px-3 py-2 text-right text-green-600">${{ number_format($group->total_amount, 4) }}</td>
-                                        </tr>
-                                    @endforeach
-                                </tbody>
-                            </table>
-                        </div>
-                    @endif
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50 text-gray-600">
+                            <tr>
+                                <th class="text-left px-3 py-2 font-medium">模型</th>
+                                <th class="text-right px-3 py-2 font-medium">请求数</th>
+                                <th class="text-right px-3 py-2 font-medium">金额</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            @foreach ($modelDistribution as $model)
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-3 py-2 text-gray-800">{{ $model->model_name }}</td>
+                                    <td class="px-3 py-2 text-right text-gray-700">{{ number_format($model->request_count) }}</td>
+                                    <td class="px-3 py-2 text-right text-green-600">${{ number_format($model->total_amount, 4) }}</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -171,23 +157,22 @@
                     <table class="w-full text-sm">
                         <thead class="bg-gray-50 text-gray-600">
                             <tr>
-                                <th class="text-left px-4 py-3 font-medium">时间</th>
-                                <th class="text-left px-4 py-3 font-medium">分组</th>
-                                <th class="text-left px-4 py-3 font-medium">模型</th>
-                                <th class="text-right px-4 py-3 font-medium">输入</th>
-                                <th class="text-right px-4 py-3 font-medium">输出</th>
-                                <th class="text-right px-4 py-3 font-medium">金额</th>
+                                <th class="text-left px-3 sm:px-4 py-3 font-medium">时间</th>
+                                <th class="text-left px-3 sm:px-4 py-3 font-medium">模型</th>
+                                <th class="text-right px-4 py-3 font-medium hidden sm:table-cell">输入</th>
+                                <th class="text-right px-4 py-3 font-medium hidden sm:table-cell">输出</th>
+                                <th class="text-right px-3 sm:px-4 py-3 font-medium">金额</th>
                             </tr>
                         </thead>
                         <tbody id="logsTableBody" class="divide-y divide-gray-100">
                             <tr>
-                                <td colspan="6" class="px-4 py-8 text-center text-gray-500">加载中...</td>
+                                <td colspan="5" class="px-4 py-8 text-center text-gray-500">加载中...</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
                 {{-- 分页 --}}
-                <div class="px-5 py-4 border-t flex items-center justify-between">
+                <div class="px-4 sm:px-5 py-3 sm:py-4 border-t flex flex-col sm:flex-row items-center justify-between gap-2">
                     <div class="text-sm text-gray-500">
                         共 <span id="totalCount">0</span> 条记录
                     </div>
@@ -209,9 +194,10 @@
 
     <script>
         const COLORS = [
-            '#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6',
-            '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1'
+            '#1D93AB', '#2DD4BF', '#0EA5E9', '#6366F1', '#8B5CF6',
+            '#A78BFA', '#F59E0B', '#10B981', '#EC4899', '#64748B'
         ];
+        const isMobile = window.innerWidth < 640;
 
         // Tab 切换
         document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -248,7 +234,7 @@
         const requestLineDataset = {
             label: '请求数',
             data: Object.values(dailyData.requests),
-            borderColor: '#3B82F6',
+            borderColor: '#6366F1',
             backgroundColor: 'transparent',
             type: 'line',
             tension: 0.3,
@@ -256,6 +242,39 @@
             order: 1,
             pointRadius: 2,
             borderWidth: 2
+        };
+
+        // 柱顶总金额标签插件
+        const totalLabelPlugin = {
+            id: 'totalBarLabels',
+            afterDatasetsDraw(chart) {
+                const { ctx, data, scales: { x, y } } = chart;
+                const barDatasets = data.datasets.filter(ds => ds.type !== 'line');
+                if (barDatasets.length === 0) return;
+
+                const numPoints = data.labels.length;
+                ctx.save();
+                ctx.font = isMobile ? 'bold 9px sans-serif' : 'bold 11px sans-serif';
+                ctx.fillStyle = '#374151';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+
+                for (let i = 0; i < numPoints; i++) {
+                    // 天数多且屏幕窄时隔一个显示
+                    if (numPoints > 14 && chart.width < 500 && i % 2 !== 0) continue;
+                    let total = 0;
+                    barDatasets.forEach(ds => {
+                        const val = ds.data[i];
+                        if (typeof val === 'number') total += val;
+                    });
+                    if (total <= 0) continue;
+
+                    const xPos = x.getPixelForValue(i);
+                    const yPos = y.getPixelForValue(total);
+                    ctx.fillText('$' + total.toFixed(2), xPos, yPos - 4);
+                }
+                ctx.restore();
+            }
         };
 
         new Chart(document.getElementById('trendChart'), {
@@ -266,9 +285,17 @@
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
                 plugins: {
-                    legend: { position: 'top' },
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            boxWidth: isMobile ? 8 : 40,
+                            font: { size: isMobile ? 10 : 12 },
+                            padding: isMobile ? 6 : 10
+                        }
+                    },
                     tooltip: {
                         filter: ctx => ctx.dataset.type === 'line' || ctx.raw > 0,
                         callbacks: {
@@ -298,7 +325,8 @@
                         grid: { drawOnChartArea: false }
                     }
                 }
-            }
+            },
+            plugins: [totalLabelPlugin]
         });
 
         // 模型饼图
@@ -315,7 +343,7 @@
             options: {
                 responsive: true,
                 plugins: {
-                    legend: { position: 'right' },
+                    legend: { position: isMobile ? 'bottom' : 'right' },
                     tooltip: {
                         callbacks: {
                             label: ctx => `${ctx.label}: $${ctx.raw.toFixed(4)}`
@@ -324,43 +352,17 @@
                 }
             }
         });
-
-        // 分组饼图
-        @if (!$groupDistribution->isEmpty())
-        const groupData = @json($groupDistribution);
-        new Chart(document.getElementById('groupPieChart'), {
-            type: 'doughnut',
-            data: {
-                labels: groupData.map(g => g.group),
-                datasets: [{
-                    data: groupData.map(g => g.total_amount),
-                    backgroundColor: COLORS
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: { position: 'right' },
-                    tooltip: {
-                        callbacks: {
-                            label: ctx => `${ctx.label}: $${ctx.raw.toFixed(4)}`
-                        }
-                    }
-                }
-            }
-        });
-        @endif
 
         // 日志分页
         let logsLoaded = false;
         let currentPage = 1;
         let pageSize = 20;
         const tokenName = @json($tokenName);
-        const apiUrl = @json(isset($isPublic) && $isPublic ? "/user/{$apikey}/logs" : "/admin/user/{$tokenName}/logs");
+        const apiUrl = @json($logsUrl);
 
         async function loadLogs() {
             const tbody = document.getElementById('logsTableBody');
-            tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">加载中...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">加载中...</td></tr>';
 
             try {
                 const res = await fetch(`${apiUrl}?page=${currentPage}&pageSize=${pageSize}`);
@@ -375,22 +377,21 @@
                 document.getElementById('nextBtn').disabled = data.page >= data.totalPages;
 
                 if (data.data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">暂无数据</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">暂无数据</td></tr>';
                     return;
                 }
 
                 tbody.innerHTML = data.data.map(log => `
                     <tr class="hover:bg-gray-50">
-                        <td class="px-4 py-3 text-gray-700 whitespace-nowrap">${log.created_at}</td>
-                        <td class="px-4 py-3 text-gray-700">${log.group || '-'}</td>
-                        <td class="px-4 py-3 text-gray-800 font-medium">${log.model_name}</td>
-                        <td class="px-4 py-3 text-right text-gray-700">${log.prompt_tokens.toLocaleString()}</td>
-                        <td class="px-4 py-3 text-right text-gray-700">${log.completion_tokens.toLocaleString()}</td>
-                        <td class="px-4 py-3 text-right text-green-600 font-medium">$${log.amount.toFixed(4)}</td>
+                        <td class="px-3 sm:px-4 py-2 sm:py-3 text-gray-700 whitespace-nowrap text-xs sm:text-sm">${log.created_at}</td>
+                        <td class="px-3 sm:px-4 py-2 sm:py-3 text-gray-800 font-medium text-xs sm:text-sm">${log.model_name}</td>
+                        <td class="px-4 py-3 text-right text-gray-700 hidden sm:table-cell">${log.prompt_tokens.toLocaleString()}</td>
+                        <td class="px-4 py-3 text-right text-gray-700 hidden sm:table-cell">${log.completion_tokens.toLocaleString()}</td>
+                        <td class="px-3 sm:px-4 py-2 sm:py-3 text-right text-green-600 font-medium text-xs sm:text-sm">$${log.amount.toFixed(4)}</td>
                     </tr>
                 `).join('');
             } catch (err) {
-                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-red-500">加载失败</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-red-500">加载失败</td></tr>';
             }
         }
 
