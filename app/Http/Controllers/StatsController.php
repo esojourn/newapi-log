@@ -143,6 +143,11 @@ class StatsController extends Controller
             $days = 1;
         }
 
+        $token = Token::where('name', $tokenName)->first();
+        $balance = $token
+            ? ($token->unlimited_quota ? '无限' : '$' . number_format($token->remain_quota / 500000, 4))
+            : '-';
+
         $since = Carbon::now()->subDays($days)->startOfDay();
         $sinceTimestamp = $since->timestamp;
 
@@ -271,6 +276,7 @@ class StatsController extends Controller
             'dailyModelNames',
             'modelDistribution',
             'groupDistribution',
+            'balance',
             'logsUrl'
         ));
     }
