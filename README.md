@@ -60,6 +60,15 @@ ADMIN_PASSWORD=your-admin-password
 
 4. 启动服务即可使用。
 
+## 更新配置
+
+修改 `.env`（如数据库连接信息）后，需清除 Laravel 配置缓存使其生效，无需重启 Apache：
+
+```bash
+php artisan config:clear
+php artisan cache:clear
+```
+
 ## 本地开发（DDEV）
 
 ```bash
