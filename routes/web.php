@@ -25,6 +25,7 @@ Route::get('/', function () {
 Route::post('/', [StatsController::class, 'authenticate'])->middleware('throttle:10,1');
 Route::get('/usage', [StatsController::class, 'usage'])->name('user.usage');
 Route::get('/usage/logs', [StatsController::class, 'usageLogs'])->name('user.usage.logs');
+Route::get('/usage/hourly', [StatsController::class, 'usageHourly'])->name('user.usage.hourly');
 Route::post('/signout', function (Request $request) {
     $request->session()->forget(['user_api_key', 'user_token_name']);
     return redirect('/');
@@ -38,7 +39,9 @@ Route::middleware('admin')->group(function () {
     Route::get('/admin', [StatsController::class, 'dashboard'])->name('admin.dashboard');
     Route::get('/admin/user/{tokenName}', [StatsController::class, 'userDetail'])->name('admin.user.detail');
     Route::get('/admin/user/{tokenName}/logs', [StatsController::class, 'userLogs'])->name('admin.user.logs');
+    Route::get('/admin/user/{tokenName}/hourly', [StatsController::class, 'userHourly'])->name('admin.user.hourly');
 });
 
 Route::get('/user/{apikey}', [StatsController::class, 'publicUserDetail'])->name('user.detail');
 Route::get('/user/{apikey}/logs', [StatsController::class, 'publicUserLogs'])->name('user.logs');
+Route::get('/user/{apikey}/hourly', [StatsController::class, 'publicUserHourly'])->name('user.hourly');

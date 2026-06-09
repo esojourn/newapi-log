@@ -103,7 +103,7 @@
 
             {{-- 消费趋势图 --}}
             <div class="bg-white rounded-lg shadow p-4 sm:p-5">
-                <h2 class="text-lg font-semibold text-gray-800 mb-4">每日消费趋势</h2>
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">每日消费趋势<span class="text-xs font-normal text-gray-400 ml-2">点击柱状查看每小时明细</span></h2>
                 <div id="trendChartContainer" style="position: relative;">
                     <canvas id="trendChart"></canvas>
                 </div>
@@ -187,6 +187,42 @@
                             下一页
                         </button>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- 每小时消费明细 模态框 --}}
+    <div id="hourlyModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black bg-opacity-50 p-3 sm:p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl flex flex-col" style="max-height: 90vh;">
+            <div class="px-4 sm:px-5 py-3 sm:py-4 border-b flex items-center justify-between">
+                <h3 class="text-base sm:text-lg font-semibold text-gray-800">
+                    <span id="hourlyModalDate"></span> 每小时消费明细
+                </h3>
+                <button id="hourlyModalClose" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div class="px-4 sm:px-5 py-4 overflow-y-auto">
+                <div id="hourlySummary" class="text-sm text-gray-500 mb-3"></div>
+                <div style="position: relative; height: 220px;" class="mb-4">
+                    <canvas id="hourlyChart"></canvas>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50 text-gray-600">
+                            <tr>
+                                <th class="text-left px-3 py-2 font-medium">时段</th>
+                                <th class="text-right px-3 py-2 font-medium">请求数</th>
+                                <th class="text-right px-3 py-2 font-medium hidden sm:table-cell">输入</th>
+                                <th class="text-right px-3 py-2 font-medium hidden sm:table-cell">输出</th>
+                                <th class="text-right px-3 py-2 font-medium">金额</th>
+                            </tr>
+                        </thead>
+                        <tbody id="hourlyTableBody" class="divide-y divide-gray-100"></tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -287,6 +323,15 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
+                onHover: (event, elements) => {
+                    event.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+                },
+                onClick: (event, elements, chart) => {
+                    const points = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, true);
+                    if (points.length === 0) return;
+                    const date = dates[points[0].index];
+                    if (date) openHourlyModal(date);
+                },
                 plugins: {
                     legend: {
                         position: 'top',
@@ -412,6 +457,85 @@
             currentPage = 1;
             loadLogs();
         });
+
+        // 每小时消费明细模态框
+        const hourlyUrl = @json($hourlyUrl);
+        const hourlyModal = document.getElementById('hourlyModal');
+        let hourlyChart = null;
+
+        function closeHourlyModal() {
+            hourlyModal.classList.add('hidden');
+            hourlyModal.classList.remove('flex');
+        }
+
+        document.getElementById('hourlyModalClose').addEventListener('click', closeHourlyModal);
+        hourlyModal.addEventListener('click', (e) => {
+            if (e.target === hourlyModal) closeHourlyModal();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !hourlyModal.classList.contains('hidden')) closeHourlyModal();
+        });
+
+        async function openHourlyModal(date) {
+            hourlyModal.classList.remove('hidden');
+            hourlyModal.classList.add('flex');
+            document.getElementById('hourlyModalDate').textContent = date;
+            document.getElementById('hourlySummary').textContent = '加载中...';
+            const tbody = document.getElementById('hourlyTableBody');
+            tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-6 text-center text-gray-500">加载中...</td></tr>';
+
+            try {
+                const res = await fetch(`${hourlyUrl}?date=${encodeURIComponent(date)}`);
+                const data = await res.json();
+                const hours = data.hours || [];
+
+                document.getElementById('hourlySummary').textContent =
+                    `当日合计：${data.total_requests.toLocaleString()} 次请求，消费 $${data.total_amount.toFixed(4)}`;
+
+                if (hourlyChart) hourlyChart.destroy();
+                hourlyChart = new Chart(document.getElementById('hourlyChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: hours.map(h => h.label),
+                        datasets: [{
+                            label: '金额 ($)',
+                            data: hours.map(h => h.amount),
+                            backgroundColor: '#1D93AB'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { callbacks: { label: ctx => `$${ctx.raw.toFixed(4)}` } }
+                        },
+                        scales: {
+                            x: { ticks: { font: { size: isMobile ? 8 : 10 } } },
+                            y: { beginAtZero: true, title: { display: true, text: '金额 ($)' } }
+                        }
+                    }
+                });
+
+                const active = hours.filter(h => h.requests > 0);
+                if (active.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-6 text-center text-gray-500">当日无消费记录</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = active.map(h => `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-2 text-gray-700 whitespace-nowrap">${h.label} - ${String((h.hour + 1) % 24).padStart(2, '0')}:00</td>
+                        <td class="px-3 py-2 text-right text-gray-700">${h.requests.toLocaleString()}</td>
+                        <td class="px-3 py-2 text-right text-gray-700 hidden sm:table-cell">${h.prompt_tokens.toLocaleString()}</td>
+                        <td class="px-3 py-2 text-right text-gray-700 hidden sm:table-cell">${h.completion_tokens.toLocaleString()}</td>
+                        <td class="px-3 py-2 text-right text-green-600 font-medium">$${h.amount.toFixed(4)}</td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                document.getElementById('hourlySummary').textContent = '';
+                tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-6 text-center text-red-500">加载失败</td></tr>';
+            }
+        }
     </script>
 </body>
 </html>

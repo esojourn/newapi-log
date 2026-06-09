@@ -265,6 +265,7 @@ class StatsController extends Controller
             });
 
         $logsUrl = "/admin/user/{$tokenName}/logs";
+        $hourlyUrl = "/admin/user/{$tokenName}/hourly";
 
         return view('admin.user-detail', compact(
             'tokenName',
@@ -277,7 +278,8 @@ class StatsController extends Controller
             'modelDistribution',
             'groupDistribution',
             'balance',
-            'logsUrl'
+            'logsUrl',
+            'hourlyUrl'
         ));
     }
 
@@ -320,6 +322,61 @@ class StatsController extends Controller
             'page' => $page,
             'pageSize' => $pageSize,
             'totalPages' => (int) ceil($total / $pageSize),
+        ]);
+    }
+
+    /**
+     * 某天每小时消费明细 API
+     */
+    public function userHourly(Request $request, string $tokenName)
+    {
+        try {
+            $day = Carbon::createFromFormat('Y-m-d', (string) $request->query('date'))->startOfDay();
+        } catch (\Exception $e) {
+            return response()->json(['error' => '日期格式错误'], 422);
+        }
+
+        $start = $day->copy()->startOfDay()->timestamp;
+        $end = $day->copy()->endOfDay()->timestamp;
+
+        $rows = DB::table('logs')
+            ->where('token_name', $tokenName)
+            ->where('created_at', '>=', $start)
+            ->where('created_at', '<=', $end)
+            ->groupBy('hour')
+            ->selectRaw('HOUR(FROM_UNIXTIME(created_at)) as hour')
+            ->selectRaw('SUM(quota) as quota')
+            ->selectRaw('COUNT(*) as requests')
+            ->selectRaw('SUM(prompt_tokens) as prompt_tokens')
+            ->selectRaw('SUM(completion_tokens) as completion_tokens')
+            ->orderBy('hour')
+            ->get()
+            ->keyBy('hour');
+
+        $hours = [];
+        $totalAmount = 0;
+        $totalRequests = 0;
+        for ($h = 0; $h < 24; $h++) {
+            $row = $rows->get($h);
+            $amount = $row ? $this->quotaToAmount($row->quota) : 0;
+            $requests = $row ? (int) $row->requests : 0;
+            $totalAmount += $amount;
+            $totalRequests += $requests;
+            $hours[] = [
+                'hour' => $h,
+                'label' => sprintf('%02d:00', $h),
+                'amount' => $amount,
+                'requests' => $requests,
+                'prompt_tokens' => $row ? (int) $row->prompt_tokens : 0,
+                'completion_tokens' => $row ? (int) $row->completion_tokens : 0,
+            ];
+        }
+
+        return response()->json([
+            'date' => $day->format('Y-m-d'),
+            'hours' => $hours,
+            'total_amount' => round($totalAmount, 4),
+            'total_requests' => $totalRequests,
         ]);
     }
 
@@ -485,6 +542,7 @@ class StatsController extends Controller
         $isPublic = true;
         $isSession = true;
         $logsUrl = '/usage/logs';
+        $hourlyUrl = '/usage/hourly';
 
         return view('admin.user-detail', compact(
             'tokenName',
@@ -499,7 +557,8 @@ class StatsController extends Controller
             'balance',
             'isPublic',
             'isSession',
-            'logsUrl'
+            'logsUrl',
+            'hourlyUrl'
         ));
     }
 
@@ -514,6 +573,19 @@ class StatsController extends Controller
         }
 
         return $this->userLogs($request, $tokenName);
+    }
+
+    /**
+     * 某天每小时消费明细 API（Session 认证，GET /usage/hourly）
+     */
+    public function usageHourly(Request $request)
+    {
+        $tokenName = session('user_token_name');
+        if (!$tokenName) {
+            return response()->json(['error' => '未认证'], 401);
+        }
+
+        return $this->userHourly($request, $tokenName);
     }
 
     /**
@@ -648,6 +720,7 @@ class StatsController extends Controller
 
         $isPublic = true;
         $logsUrl = "/user/{$apikey}/logs";
+        $hourlyUrl = "/user/{$apikey}/hourly";
 
         return view('admin.user-detail', compact(
             'tokenName',
@@ -662,7 +735,8 @@ class StatsController extends Controller
             'balance',
             'isPublic',
             'apikey',
-            'logsUrl'
+            'logsUrl',
+            'hourlyUrl'
         ));
     }
 
@@ -679,5 +753,20 @@ class StatsController extends Controller
         }
 
         return $this->userLogs($request, $token->name);
+    }
+
+    /**
+     * 公开访问某天每小时消费明细 API（通过 API Key）
+     */
+    public function publicUserHourly(Request $request, string $apikey)
+    {
+        $processedKey = substr($apikey, 3);
+        $token = Token::where('key', $processedKey)->first();
+
+        if (!$token) {
+            abort(404);
+        }
+
+        return $this->userHourly($request, $token->name);
     }
 }
