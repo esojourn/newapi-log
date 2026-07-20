@@ -10,9 +10,9 @@ use App\Models\Token;
 class StatsController extends Controller
 {
     /**
-     * CSV 导出最大条数，防止文件过大拖垮服务器
+     * CSV 导出日期范围上限（天），防止文件过大拖垮服务器
      */
-    private const EXPORT_MAX_ROWS = 50000;
+    private const EXPORT_MAX_DAYS = 7;
 
     /**
      * 将 quota 转换为金额（quota / 500000）
@@ -333,25 +333,35 @@ class StatsController extends Controller
     }
 
     /**
-     * 用户日志导出 CSV（限制时间范围与最大条数，避免文件过大）
+     * 用户日志导出 CSV（按日期范围导出，范围上限 7 天，避免文件过大）
      */
     public function userLogsExport(Request $request, string $tokenName)
     {
-        $days = (int) $request->query('days', 7);
-        if (!in_array($days, [1, 3, 7, 30, 90])) {
-            $days = 7;
+        try {
+            $start = Carbon::createFromFormat('Y-m-d', (string) $request->query('start'))->startOfDay();
+            $end = Carbon::createFromFormat('Y-m-d', (string) $request->query('end'))->endOfDay();
+        } catch (\Exception $e) {
+            abort(422, '日期格式错误');
         }
 
-        $sinceTimestamp = Carbon::now()->subDays($days)->startOfDay()->timestamp;
+        if ($start->gt($end)) {
+            abort(422, '开始日期不能晚于结束日期');
+        }
+        if ($start->diffInDays($end) >= self::EXPORT_MAX_DAYS) {
+            abort(422, '导出日期范围最多 ' . self::EXPORT_MAX_DAYS . ' 天');
+        }
+
+        $startTimestamp = $start->timestamp;
+        $endTimestamp = $end->timestamp;
 
         $filename = sprintf(
-            'logs_%s_%dd_%s.csv',
+            'logs_%s_%s-%s.csv',
             preg_replace('/[^A-Za-z0-9_\-]+/', '_', $tokenName),
-            $days,
-            Carbon::now()->format('Ymd_His')
+            $start->format('Ymd'),
+            $end->format('Ymd')
         );
 
-        return response()->streamDownload(function () use ($tokenName, $sinceTimestamp) {
+        return response()->streamDownload(function () use ($tokenName, $startTimestamp, $endTimestamp) {
             $out = fopen('php://output', 'w');
             // UTF-8 BOM，避免 Excel 打开中文乱码
             fwrite($out, "\xEF\xBB\xBF");
@@ -368,9 +378,9 @@ class StatsController extends Controller
 
             $rows = DB::table('logs')
                 ->where('token_name', $tokenName)
-                ->where('created_at', '>=', $sinceTimestamp)
+                ->where('created_at', '>=', $startTimestamp)
+                ->where('created_at', '<=', $endTimestamp)
                 ->orderByDesc('created_at')
-                ->limit(self::EXPORT_MAX_ROWS)
                 ->cursor();
 
             $count = 0;

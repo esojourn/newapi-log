@@ -145,14 +145,10 @@
                     <h2 class="text-lg font-semibold text-gray-800">消费日志</h2>
                     <div class="flex items-center gap-2 flex-wrap">
                         @isset($exportUrl)
-                            <select id="exportDays" class="border border-gray-300 rounded px-2 py-1 text-sm">
-                                <option value="1">最近 1 天</option>
-                                <option value="3">最近 3 天</option>
-                                <option value="7" selected>最近 7 天</option>
-                                <option value="30">最近 30 天</option>
-                                <option value="90">最近 90 天</option>
-                            </select>
-                            <button id="exportBtn" title="最多导出 50000 条记录" class="px-3 py-1 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-1">
+                            <input type="date" id="exportStart" class="border border-gray-300 rounded px-2 py-1 text-sm">
+                            <span class="text-sm text-gray-500">至</span>
+                            <input type="date" id="exportEnd" class="border border-gray-300 rounded px-2 py-1 text-sm">
+                            <button id="exportBtn" title="导出日期范围最多 7 天" class="px-3 py-1 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"></path>
                                 </svg>
@@ -475,10 +471,38 @@
         });
 
         @isset($exportUrl)
-        // 导出 CSV
+        // 导出 CSV（日期范围上限 7 天）
+        const EXPORT_MAX_DAYS = 7;
+        const exportStart = document.getElementById('exportStart');
+        const exportEnd = document.getElementById('exportEnd');
+        const fmtDate = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+        // 默认最近 7 天
+        {
+            const end = new Date();
+            const start = new Date();
+            start.setDate(start.getDate() - (EXPORT_MAX_DAYS - 1));
+            exportStart.value = fmtDate(start);
+            exportEnd.value = fmtDate(end);
+        }
+
         document.getElementById('exportBtn').addEventListener('click', () => {
-            const days = document.getElementById('exportDays').value;
-            window.location.href = `${@json($exportUrl)}?days=${days}`;
+            if (!exportStart.value || !exportEnd.value) {
+                alert('请选择导出日期范围');
+                return;
+            }
+            const start = new Date(exportStart.value);
+            const end = new Date(exportEnd.value);
+            if (start > end) {
+                alert('开始日期不能晚于结束日期');
+                return;
+            }
+            const rangeDays = Math.round((end - start) / 86400000) + 1;
+            if (rangeDays > EXPORT_MAX_DAYS) {
+                alert(`导出日期范围最多 ${EXPORT_MAX_DAYS} 天`);
+                return;
+            }
+            window.location.href = `${@json($exportUrl)}?start=${exportStart.value}&end=${exportEnd.value}`;
         });
         @endisset
 
