@@ -141,9 +141,25 @@
         {{-- 日志 Tab --}}
         <div id="logs-tab" class="tab-content">
             <div class="bg-white rounded-lg shadow overflow-hidden">
-                <div class="px-5 py-4 border-b flex items-center justify-between">
+                <div class="px-5 py-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <h2 class="text-lg font-semibold text-gray-800">消费日志</h2>
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        @isset($exportUrl)
+                            <select id="exportDays" class="border border-gray-300 rounded px-2 py-1 text-sm">
+                                <option value="1">最近 1 天</option>
+                                <option value="3">最近 3 天</option>
+                                <option value="7" selected>最近 7 天</option>
+                                <option value="30">最近 30 天</option>
+                                <option value="90">最近 90 天</option>
+                            </select>
+                            <button id="exportBtn" title="最多导出 50000 条记录" class="px-3 py-1 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-1">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"></path>
+                                </svg>
+                                导出 CSV
+                            </button>
+                            <span class="border-l border-gray-200 h-5 mx-1 hidden sm:block"></span>
+                        @endisset
                         <span class="text-sm text-gray-500">每页</span>
                         <select id="pageSize" class="border border-gray-300 rounded px-2 py-1 text-sm">
                             <option value="20">20</option>
@@ -457,6 +473,14 @@
             currentPage = 1;
             loadLogs();
         });
+
+        @isset($exportUrl)
+        // 导出 CSV
+        document.getElementById('exportBtn').addEventListener('click', () => {
+            const days = document.getElementById('exportDays').value;
+            window.location.href = `${@json($exportUrl)}?days=${days}`;
+        });
+        @endisset
 
         // 每小时消费明细模态框
         const hourlyUrl = @json($hourlyUrl);

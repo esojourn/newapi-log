@@ -39,6 +39,7 @@ Route::middleware('admin')->group(function () {
     Route::get('/admin', [StatsController::class, 'dashboard'])->name('admin.dashboard');
     Route::get('/admin/user/{tokenName}', [StatsController::class, 'userDetail'])->name('admin.user.detail');
     Route::get('/admin/user/{tokenName}/logs', [StatsController::class, 'userLogs'])->name('admin.user.logs');
+    Route::get('/admin/user/{tokenName}/logs/export', [StatsController::class, 'userLogsExport'])->name('admin.user.logs.export');
     Route::get('/admin/user/{tokenName}/hourly', [StatsController::class, 'userHourly'])->name('admin.user.hourly');
 });
 

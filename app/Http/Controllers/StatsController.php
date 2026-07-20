@@ -10,6 +10,11 @@ use App\Models\Token;
 class StatsController extends Controller
 {
     /**
+     * CSV 导出最大条数，防止文件过大拖垮服务器
+     */
+    private const EXPORT_MAX_ROWS = 50000;
+
+    /**
      * 将 quota 转换为金额（quota / 500000）
      */
     private function quotaToAmount(int $quota): float
@@ -266,6 +271,7 @@ class StatsController extends Controller
 
         $logsUrl = "/admin/user/{$tokenName}/logs";
         $hourlyUrl = "/admin/user/{$tokenName}/hourly";
+        $exportUrl = "/admin/user/{$tokenName}/logs/export";
 
         return view('admin.user-detail', compact(
             'tokenName',
@@ -279,7 +285,8 @@ class StatsController extends Controller
             'groupDistribution',
             'balance',
             'logsUrl',
-            'hourlyUrl'
+            'hourlyUrl',
+            'exportUrl'
         ));
     }
 
@@ -322,6 +329,71 @@ class StatsController extends Controller
             'page' => $page,
             'pageSize' => $pageSize,
             'totalPages' => (int) ceil($total / $pageSize),
+        ]);
+    }
+
+    /**
+     * 用户日志导出 CSV（限制时间范围与最大条数，避免文件过大）
+     */
+    public function userLogsExport(Request $request, string $tokenName)
+    {
+        $days = (int) $request->query('days', 7);
+        if (!in_array($days, [1, 3, 7, 30, 90])) {
+            $days = 7;
+        }
+
+        $sinceTimestamp = Carbon::now()->subDays($days)->startOfDay()->timestamp;
+
+        $filename = sprintf(
+            'logs_%s_%dd_%s.csv',
+            preg_replace('/[^A-Za-z0-9_\-]+/', '_', $tokenName),
+            $days,
+            Carbon::now()->format('Ymd_His')
+        );
+
+        return response()->streamDownload(function () use ($tokenName, $sinceTimestamp) {
+            $out = fopen('php://output', 'w');
+            // UTF-8 BOM，避免 Excel 打开中文乱码
+            fwrite($out, "\xEF\xBB\xBF");
+            fputcsv($out, ['时间', '模型', '分组', '输入 Tokens', '输出 Tokens', 'Quota', '金额($)', '耗时(秒)', '流式', '内容']);
+
+            // 防止以 = + - @ 开头的文本在 Excel 中被当作公式执行
+            $sanitize = function ($value) {
+                $value = (string) $value;
+                if ($value !== '' && in_array($value[0], ['=', '+', '-', '@'], true)) {
+                    return "'" . $value;
+                }
+                return $value;
+            };
+
+            $rows = DB::table('logs')
+                ->where('token_name', $tokenName)
+                ->where('created_at', '>=', $sinceTimestamp)
+                ->orderByDesc('created_at')
+                ->limit(self::EXPORT_MAX_ROWS)
+                ->cursor();
+
+            $count = 0;
+            foreach ($rows as $log) {
+                fputcsv($out, [
+                    date('Y-m-d H:i:s', $log->created_at),
+                    $sanitize($log->model_name),
+                    $sanitize($log->group),
+                    $log->prompt_tokens,
+                    $log->completion_tokens,
+                    $log->quota,
+                    $this->quotaToAmount($log->quota),
+                    $log->use_time,
+                    $log->is_stream ? '是' : '否',
+                    $sanitize($log->content),
+                ]);
+                if (++$count % 1000 === 0) {
+                    flush();
+                }
+            }
+            fclose($out);
+        }, $filename, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
         ]);
     }
 
