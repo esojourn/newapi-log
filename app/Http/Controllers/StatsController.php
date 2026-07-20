@@ -365,7 +365,7 @@ class StatsController extends Controller
             $out = fopen('php://output', 'w');
             // UTF-8 BOM，避免 Excel 打开中文乱码
             fwrite($out, "\xEF\xBB\xBF");
-            fputcsv($out, ['时间', '模型', '分组', '输入 Tokens', '输出 Tokens', 'Quota', '金额($)', '耗时(秒)', '流式', '内容']);
+            fputcsv($out, ['时间', '模型', '分组', '输入 Tokens', '输出 Tokens', '金额($)', '耗时(秒)', '流式']);
 
             // 防止以 = + - @ 开头的文本在 Excel 中被当作公式执行
             $sanitize = function ($value) {
@@ -391,11 +391,9 @@ class StatsController extends Controller
                     $sanitize($log->group),
                     $log->prompt_tokens,
                     $log->completion_tokens,
-                    $log->quota,
                     $this->quotaToAmount($log->quota),
                     $log->use_time,
                     $log->is_stream ? '是' : '否',
-                    $sanitize($log->content),
                 ]);
                 if (++$count % 1000 === 0) {
                     flush();
