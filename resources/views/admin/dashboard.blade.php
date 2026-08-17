@@ -44,7 +44,7 @@
 
     <div class="max-w-7xl mx-auto px-4 py-6 space-y-6">
         {{-- 总览卡片 --}}
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
             <div class="bg-white rounded-lg shadow p-5">
                 <div class="text-sm text-gray-500">总请求数</div>
                 <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_requests) }}</div>
@@ -60,6 +60,13 @@
             <div class="bg-white rounded-lg shadow p-5">
                 <div class="text-sm text-gray-500">活跃用户数</div>
                 <div class="text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->active_users) }}</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-5" title="缓存命中率 = 命中缓存的输入 Tokens / 总输入 Tokens">
+                <div class="text-sm text-gray-500">缓存命中率</div>
+                <div class="text-2xl font-bold mt-1" style="color:#1D93AB;">
+                    {{ $overview->cache_hit_rate === null ? '-' : $overview->cache_hit_rate . '%' }}
+                </div>
+                <div class="text-xs text-gray-400 mt-1">预估节省 ${{ number_format($overview->cache_saved_amount, 4) }}</div>
             </div>
         </div>
 
@@ -146,6 +153,18 @@
                         @endforeach
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        {{-- 缓存利用率趋势 --}}
+        <div class="bg-white rounded-lg shadow p-5">
+            <h2 class="text-lg font-semibold text-gray-800 mb-1">缓存利用率趋势</h2>
+            <p class="text-xs text-gray-400 mb-4">
+                输入 Tokens 按缓存状态拆分（三段之和 = 当日总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
+                区间内预估节省 <span class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
+            </p>
+            <div class="relative" style="height: 300px;">
+                <canvas id="cacheChart"></canvas>
             </div>
         </div>
     </div>
@@ -287,6 +306,78 @@
                 plugins: { legend: { position: 'top' } },
                 scales: {
                     y: { ticks: { callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v } }
+                }
+            }
+        });
+
+        // 缓存利用率趋势：输入 Tokens 按缓存状态堆叠 + 命中率折线
+        const cacheData = @json($dailyCacheData);
+        const fmtTokens = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v;
+
+        const cacheRead = Object.values(cacheData.cache_tokens);
+        const cacheWrite = Object.values(cacheData.cache_creation_tokens);
+        const cacheMiss = Object.values(cacheData.uncached_prompt_tokens);
+        // 命中率 = 缓存读取 / 当日总输入；当日无输入时留空（折线断开）
+        const cacheHitRate = cacheRead.map((read, i) => {
+            const total = read + cacheWrite[i] + cacheMiss[i];
+            return total > 0 ? +(read / total * 100).toFixed(1) : null;
+        });
+
+        new Chart(document.getElementById('cacheChart'), {
+            type: 'bar',
+            data: {
+                labels: @json($dates),
+                datasets: [
+                    { label: '缓存读取', data: cacheRead, backgroundColor: '#1D93AB', stack: 'tokens', yAxisID: 'y', order: 2 },
+                    { label: '缓存写入', data: cacheWrite, backgroundColor: '#F59E0B', stack: 'tokens', yAxisID: 'y', order: 2 },
+                    { label: '未命中输入', data: cacheMiss, backgroundColor: '#CBD5E1', stack: 'tokens', yAxisID: 'y', order: 2 },
+                    {
+                        label: '命中率 (%)',
+                        data: cacheHitRate,
+                        type: 'line',
+                        borderColor: '#6366F1',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        yAxisID: 'y1',
+                        order: 1,
+                        pointRadius: 2,
+                        spanGaps: true,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => ctx.dataset.yAxisID === 'y1'
+                                ? `${ctx.dataset.label}: ${ctx.raw === null ? '-' : ctx.raw + '%'}`
+                                : `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}`
+                        }
+                    }
+                },
+                scales: {
+                    x: { stacked: true },
+                    y: {
+                        type: 'linear',
+                        position: 'left',
+                        stacked: true,
+                        title: { display: true, text: '输入 Tokens' },
+                        ticks: { callback: fmtTokens }
+                    },
+                    y1: {
+                        type: 'linear',
+                        position: 'right',
+                        min: 0,
+                        max: 100,
+                        title: { display: true, text: '命中率 (%)' },
+                        grid: { drawOnChartArea: false },
+                        ticks: { callback: v => v + '%' }
+                    }
                 }
             }
         });

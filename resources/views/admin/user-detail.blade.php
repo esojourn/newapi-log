@@ -15,8 +15,10 @@
         .tab-content { display: none; }
         .tab-content.active { display: block; }
         #trendChartContainer { min-height: 300px; }
+        #cacheChartContainer { min-height: 300px; }
         @media (max-width: 640px) {
             #trendChartContainer { min-height: 350px; }
+            #cacheChartContainer { min-height: 320px; }
             #modelPieChart { max-height: 250px; }
         }
     </style>
@@ -78,7 +80,7 @@
         {{-- 统计 Tab --}}
         <div id="stats-tab" class="tab-content active space-y-6">
             {{-- 总览卡片 --}}
-            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
                 <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">总请求数</div>
                     <div class="text-xl sm:text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_requests) }}</div>
@@ -95,9 +97,17 @@
                     <div class="text-sm text-gray-500">Prompt Tokens</div>
                     <div class="text-xl sm:text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_prompt_tokens) }}</div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-4 sm:p-5 col-span-2 md:col-span-1">
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                     <div class="text-sm text-gray-500">Completion Tokens</div>
                     <div class="text-xl sm:text-2xl font-bold text-gray-800 mt-1">{{ number_format($overview->total_completion_tokens) }}</div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4 sm:p-5 col-span-2 md:col-span-1"
+                    title="缓存命中率 = 命中缓存的输入 Tokens / 总输入 Tokens">
+                    <div class="text-sm text-gray-500">缓存命中率</div>
+                    <div class="text-xl sm:text-2xl font-bold mt-1" style="color:#1D93AB;">
+                        {{ $overview->cache_hit_rate === null ? '-' : $overview->cache_hit_rate . '%' }}
+                    </div>
+                    <div class="text-xs text-gray-400 mt-1">预估节省 ${{ number_format($overview->cache_saved_amount, 4) }}</div>
                 </div>
             </div>
 
@@ -106,6 +116,18 @@
                 <h2 class="text-lg font-semibold text-gray-800 mb-4">每日消费趋势<span class="text-xs font-normal text-gray-400 ml-2">点击柱状查看每小时明细</span></h2>
                 <div id="trendChartContainer" style="position: relative;">
                     <canvas id="trendChart"></canvas>
+                </div>
+            </div>
+
+            {{-- 缓存利用率趋势 --}}
+            <div class="bg-white rounded-lg shadow p-4 sm:p-5">
+                <h2 class="text-lg font-semibold text-gray-800 mb-1">缓存利用率趋势</h2>
+                <p class="text-xs text-gray-400 mb-4">
+                    输入 Tokens 按缓存状态拆分（三段之和 = 当日总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
+                    区间内预估节省 <span class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
+                </p>
+                <div id="cacheChartContainer" style="position: relative;">
+                    <canvas id="cacheChart"></canvas>
                 </div>
             </div>
 
@@ -172,13 +194,15 @@
                                 <th class="text-left px-3 sm:px-4 py-3 font-medium">时间</th>
                                 <th class="text-left px-3 sm:px-4 py-3 font-medium">模型</th>
                                 <th class="text-right px-4 py-3 font-medium hidden sm:table-cell">输入</th>
+                                <th class="text-right px-4 py-3 font-medium hidden sm:table-cell" title="命中缓存被读取的输入 Tokens，按折扣计费">缓存读取</th>
+                                <th class="text-right px-4 py-3 font-medium hidden sm:table-cell" title="写入缓存的 Tokens，通常按 1.25 倍计费">缓存写入</th>
                                 <th class="text-right px-4 py-3 font-medium hidden sm:table-cell">输出</th>
                                 <th class="text-right px-3 sm:px-4 py-3 font-medium">金额</th>
                             </tr>
                         </thead>
                         <tbody id="logsTableBody" class="divide-y divide-gray-100">
                             <tr>
-                                <td colspan="5" class="px-4 py-8 text-center text-gray-500">加载中...</td>
+                                <td colspan="7" class="px-4 py-8 text-center text-gray-500">加载中...</td>
                             </tr>
                         </tbody>
                     </table>
@@ -229,6 +253,8 @@
                                 <th class="text-left px-3 py-2 font-medium">时段</th>
                                 <th class="text-right px-3 py-2 font-medium">请求数</th>
                                 <th class="text-right px-3 py-2 font-medium hidden sm:table-cell">输入</th>
+                                <th class="text-right px-3 py-2 font-medium hidden sm:table-cell">缓存读取</th>
+                                <th class="text-right px-3 py-2 font-medium hidden sm:table-cell">缓存写入</th>
                                 <th class="text-right px-3 py-2 font-medium hidden sm:table-cell">输出</th>
                                 <th class="text-right px-3 py-2 font-medium">金额</th>
                             </tr>
@@ -410,6 +436,83 @@
             }
         });
 
+        // 缓存利用率趋势：输入 Tokens 按缓存状态堆叠 + 命中率折线
+        const fmtTokens = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v;
+        const cacheRead = Object.values(dailyData.cache_tokens);
+        const cacheWrite = Object.values(dailyData.cache_creation_tokens);
+        const cacheMiss = Object.values(dailyData.uncached_prompt_tokens);
+        // 命中率 = 缓存读取 / 当日总输入；当日无输入时留空（折线断开）
+        const cacheHitRate = cacheRead.map((read, i) => {
+            const total = read + cacheWrite[i] + cacheMiss[i];
+            return total > 0 ? +(read / total * 100).toFixed(1) : null;
+        });
+
+        new Chart(document.getElementById('cacheChart'), {
+            type: 'bar',
+            data: {
+                labels: dates,
+                datasets: [
+                    { label: '缓存读取', data: cacheRead, backgroundColor: '#1D93AB', stack: 'tokens', yAxisID: 'y', order: 2 },
+                    { label: '缓存写入', data: cacheWrite, backgroundColor: '#F59E0B', stack: 'tokens', yAxisID: 'y', order: 2 },
+                    { label: '未命中输入', data: cacheMiss, backgroundColor: '#CBD5E1', stack: 'tokens', yAxisID: 'y', order: 2 },
+                    {
+                        label: '命中率 (%)',
+                        data: cacheHitRate,
+                        type: 'line',
+                        borderColor: '#6366F1',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        yAxisID: 'y1',
+                        order: 1,
+                        pointRadius: 2,
+                        spanGaps: true,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            boxWidth: isMobile ? 8 : 40,
+                            font: { size: isMobile ? 10 : 12 },
+                            padding: isMobile ? 6 : 10
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => ctx.dataset.yAxisID === 'y1'
+                                ? `${ctx.dataset.label}: ${ctx.raw === null ? '-' : ctx.raw + '%'}`
+                                : `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}`
+                        }
+                    }
+                },
+                scales: {
+                    x: { stacked: true },
+                    y: {
+                        type: 'linear',
+                        position: 'left',
+                        stacked: true,
+                        title: { display: true, text: '输入 Tokens' },
+                        ticks: { callback: fmtTokens }
+                    },
+                    y1: {
+                        type: 'linear',
+                        position: 'right',
+                        min: 0,
+                        max: 100,
+                        title: { display: true, text: '命中率 (%)' },
+                        grid: { drawOnChartArea: false },
+                        ticks: { callback: v => v + '%' }
+                    }
+                }
+            }
+        });
+
         // 日志分页
         let logsLoaded = false;
         let currentPage = 1;
@@ -419,7 +522,7 @@
 
         async function loadLogs() {
             const tbody = document.getElementById('logsTableBody');
-            tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">加载中...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">加载中...</td></tr>';
 
             try {
                 const res = await fetch(`${apiUrl}?page=${currentPage}&pageSize=${pageSize}`);
@@ -434,7 +537,7 @@
                 document.getElementById('nextBtn').disabled = data.page >= data.totalPages;
 
                 if (data.data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">暂无数据</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">暂无数据</td></tr>';
                     return;
                 }
 
@@ -443,12 +546,14 @@
                         <td class="px-3 sm:px-4 py-2 sm:py-3 text-gray-700 whitespace-nowrap text-xs sm:text-sm">${log.created_at}</td>
                         <td class="px-3 sm:px-4 py-2 sm:py-3 text-gray-800 font-medium text-xs sm:text-sm">${log.model_name}</td>
                         <td class="px-4 py-3 text-right text-gray-700 hidden sm:table-cell">${log.prompt_tokens.toLocaleString()}</td>
+                        <td class="px-4 py-3 text-right hidden sm:table-cell ${log.cache_tokens > 0 ? 'font-medium' : 'text-gray-400'}" ${log.cache_tokens > 0 ? 'style="color:#1D93AB;"' : ''}>${log.cache_tokens.toLocaleString()}</td>
+                        <td class="px-4 py-3 text-right hidden sm:table-cell ${log.cache_creation_tokens > 0 ? 'text-yellow-600 font-medium' : 'text-gray-400'}">${log.cache_creation_tokens.toLocaleString()}</td>
                         <td class="px-4 py-3 text-right text-gray-700 hidden sm:table-cell">${log.completion_tokens.toLocaleString()}</td>
                         <td class="px-3 sm:px-4 py-2 sm:py-3 text-right text-green-600 font-medium text-xs sm:text-sm">$${log.amount.toFixed(4)}</td>
                     </tr>
                 `).join('');
             } catch (err) {
-                tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-red-500">加载失败</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-red-500">加载失败</td></tr>';
             }
         }
 
@@ -530,7 +635,7 @@
             document.getElementById('hourlyModalDate').textContent = date;
             document.getElementById('hourlySummary').textContent = '加载中...';
             const tbody = document.getElementById('hourlyTableBody');
-            tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-6 text-center text-gray-500">加载中...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">加载中...</td></tr>';
 
             try {
                 const res = await fetch(`${hourlyUrl}?date=${encodeURIComponent(date)}`);
@@ -567,7 +672,7 @@
 
                 const active = hours.filter(h => h.requests > 0);
                 if (active.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-6 text-center text-gray-500">当日无消费记录</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">当日无消费记录</td></tr>';
                     return;
                 }
                 tbody.innerHTML = active.map(h => `
@@ -575,13 +680,15 @@
                         <td class="px-3 py-2 text-gray-700 whitespace-nowrap">${h.label} - ${String((h.hour + 1) % 24).padStart(2, '0')}:00</td>
                         <td class="px-3 py-2 text-right text-gray-700">${h.requests.toLocaleString()}</td>
                         <td class="px-3 py-2 text-right text-gray-700 hidden sm:table-cell">${h.prompt_tokens.toLocaleString()}</td>
+                        <td class="px-3 py-2 text-right hidden sm:table-cell ${h.cache_tokens > 0 ? 'font-medium' : 'text-gray-400'}" ${h.cache_tokens > 0 ? 'style="color:#1D93AB;"' : ''}>${h.cache_tokens.toLocaleString()}</td>
+                        <td class="px-3 py-2 text-right hidden sm:table-cell ${h.cache_creation_tokens > 0 ? 'text-yellow-600 font-medium' : 'text-gray-400'}">${h.cache_creation_tokens.toLocaleString()}</td>
                         <td class="px-3 py-2 text-right text-gray-700 hidden sm:table-cell">${h.completion_tokens.toLocaleString()}</td>
                         <td class="px-3 py-2 text-right text-green-600 font-medium">$${h.amount.toFixed(4)}</td>
                     </tr>
                 `).join('');
             } catch (err) {
                 document.getElementById('hourlySummary').textContent = '';
-                tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-6 text-center text-red-500">加载失败</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-6 text-center text-red-500">加载失败</td></tr>';
             }
         }
     </script>

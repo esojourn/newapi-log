@@ -34,8 +34,28 @@ class ApiController extends Controller
         $query = Log::orderBy('created_at', 'desc')
             ->where('token_name', $token_data->name);
 
-        $total = $query->count();
-        $data = $query->paginate($pageSize, ['id', 'created_at', 'model_name', 'prompt_tokens', 'completion_tokens', 'quota'], 'page', $page);
+        // other 仅用于解析缓存明细，不原样返回：其中含 admin_info 等内部字段
+        $data = $query->paginate(
+            $pageSize,
+            ['id', 'created_at', 'model_name', 'prompt_tokens', 'completion_tokens', 'quota', 'other'],
+            'page',
+            $page
+        );
+
+        $data->through(function ($log) {
+            $cache = Log::cacheTokens($log);
+
+            return [
+                'id' => $log->id,
+                'created_at' => $log->created_at,
+                'model_name' => $log->model_name,
+                'prompt_tokens' => $log->prompt_tokens,
+                'cache_tokens' => $cache['cache_tokens'],
+                'cache_creation_tokens' => $cache['cache_creation_tokens'],
+                'completion_tokens' => $log->completion_tokens,
+                'quota' => $log->quota,
+            ];
+        });
 
         return response()->json($data->toArray());
     }

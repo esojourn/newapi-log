@@ -67,8 +67,20 @@ ddev exec php artisan route:clear
 
 - 路由：`/admin`（需认证）、`/admin/login`、`/admin/logout`
 - 认证方式：简单密码认证，密码通过 `ADMIN_PASSWORD` 环境变量配置
-- 仪表盘功能：Top 10 用户用量排行、模型使用分布、每日用量趋势
+- 仪表盘功能：Top 10 用户用量排行、模型使用分布、每日用量趋势、缓存利用率趋势
 - 支持 7/30/90 天时间范围切换
+
+### 缓存统计
+
+缓存用量（命中率、缓存读取/写入 Tokens、预估节省金额）来自 `logs.other` —— NewAPI 写入的
+JSON 字符串列，**没有独立的缓存字段列**。字段含义、计费公式与读取时的 `JSON_VALID` 守卫
+见 `docs/database-schema.md`。
+
+- SQL 侧的取值表达式集中在 `StatsController` 的 `otherInt()` / `otherRatio()` /
+  `uncachedPromptExpr()` / `cacheSavedQuotaExpr()`，聚合一律合并进现有查询的 `selectRaw`，不额外扫表
+- 逐行明细（日志列表、CSV 导出、`/api/log`）走 PHP 侧的 `Log::cacheTokens()` 解析，不用 SQL JSON 函数
+- `userDetail()` / `usage()` / `publicUserDetail()` 是三份几乎相同的副本，新增用户维度统计时
+  用 `applyCacheStats()` 这类共用私有方法，避免再复制三遍
 
 ### 数据库
 

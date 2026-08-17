@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
+use App\Models\Log;
 use App\Models\Token;
 
 class StatsController extends Controller
@@ -22,6 +23,127 @@ class StatsController extends Controller
         return round($quota / 500000, 4);
     }
 
+    /**
+     * 从 logs.other（JSON 字符串）安全取出整数字段的 SQL 表达式。
+     *
+     * other 可能是 NULL、空串或非法 JSON（老日志、充值等非消费类日志），
+     * MySQL 8 对空串调用 JSON_EXTRACT 会直接抛 ERROR 3141，因此必须先用
+     * JSON_VALID 守卫。缺失时返回 0。
+     */
+    private function otherInt(string $key): string
+    {
+        return "(CASE WHEN `other` IS NOT NULL AND `other` <> '' AND JSON_VALID(`other`)"
+            . " THEN COALESCE(CAST(JSON_EXTRACT(`other`, '$.{$key}') AS SIGNED), 0) ELSE 0 END)";
+    }
+
+    /**
+     * 同 otherInt，但取小数（计费倍率），缺失时回落到 $default。
+     */
+    private function otherRatio(string $key, float $default): string
+    {
+        return "(CASE WHEN `other` IS NOT NULL AND `other` <> '' AND JSON_VALID(`other`)"
+            . " THEN COALESCE(CAST(JSON_EXTRACT(`other`, '$.{$key}') AS DECIMAL(20,6)), {$default}) ELSE {$default} END)";
+    }
+
+    /**
+     * 未命中缓存的输入 token 表达式。
+     *
+     * prompt_tokens 已包含缓存读取与缓存写入的 token，三者相减即新输入。
+     * OpenRouter-Claude 特例下上游已扣减过 prompt_tokens，可能算出负数，故 clamp 到 0。
+     */
+    private function uncachedPromptExpr(): string
+    {
+        return "GREATEST(0, prompt_tokens - {$this->otherInt('cache_tokens')} - {$this->otherInt('cache_creation_tokens')})";
+    }
+
+    /**
+     * 缓存节省的 quota 表达式（预估）。
+     *
+     * 命中的 token 按 cache_ratio 打折计费，省下的即 (1 - cache_ratio) 那部分：
+     *   cache_tokens × (1 - cache_ratio) × model_ratio × group_ratio
+     * 按次计价（model_price > 0）时倍率不参与计费，公式不成立，记 0。
+     */
+    private function cacheSavedQuotaExpr(): string
+    {
+        return "(CASE WHEN {$this->otherRatio('model_price', 0)} > 0 THEN 0 ELSE"
+            . " {$this->otherInt('cache_tokens')} * (1 - {$this->otherRatio('cache_ratio', 1)})"
+            . " * {$this->otherRatio('model_ratio', 0)} * {$this->otherRatio('group_ratio', 1)} END)";
+    }
+
+    /**
+     * 给总览对象挂上缓存派生值：命中率与预估节省金额。
+     *
+     * 命中率的分母取「缓存读取 + 缓存写入 + 未命中输入」而非 prompt_tokens，
+     * 这样与堆叠柱图的三段口径完全一致；OpenRouter-Claude 特例下
+     * uncached 被 clamp 到 0 会让两者产生分歧，用分段之和则天然不超过 100%。
+     * 无输入时返回 null（视图显示 '-'）。
+     */
+    private function applyOverviewCache($overview): void
+    {
+        $totalInput = (int) $overview->total_cache_tokens
+            + (int) $overview->total_cache_creation_tokens
+            + (int) $overview->total_uncached_prompt_tokens;
+
+        $overview->cache_hit_rate = $totalInput > 0
+            ? round((int) $overview->total_cache_tokens / $totalInput * 100, 1)
+            : null;
+        $overview->cache_saved_amount = $this->quotaToAmount((int) round($overview->cache_saved_quota));
+    }
+
+    /**
+     * 给用户维度的总览对象挂上缓存派生值，并把每日缓存趋势填进 $dailyData。
+     *
+     * userDetail / usage / publicUserDetail 三处共用，避免重复三份。
+     */
+    private function applyCacheStats($overview, array &$dailyData, $dailyTrend): void
+    {
+        $this->applyOverviewCache($overview);
+
+        foreach ($dailyTrend as $row) {
+            if (!isset($dailyData['cache_tokens'][$row->date])) {
+                continue;
+            }
+            $dailyData['cache_tokens'][$row->date] = (int) $row->daily_cache_tokens;
+            $dailyData['cache_creation_tokens'][$row->date] = (int) $row->daily_cache_creation_tokens;
+            $dailyData['uncached_prompt_tokens'][$row->date] = (int) $row->daily_uncached_prompt_tokens;
+        }
+    }
+
+    /**
+     * 用户维度每日趋势查询上追加缓存字段（合并进现有查询，不额外扫表）。
+     */
+    private function selectDailyCache($query)
+    {
+        return $query
+            ->selectRaw("COALESCE(SUM({$this->otherInt('cache_tokens')}), 0) as daily_cache_tokens")
+            ->selectRaw("COALESCE(SUM({$this->otherInt('cache_creation_tokens')}), 0) as daily_cache_creation_tokens")
+            ->selectRaw("COALESCE(SUM({$this->uncachedPromptExpr()}), 0) as daily_uncached_prompt_tokens");
+    }
+
+    /**
+     * 总览查询上追加缓存字段（合并进现有查询，不额外扫表）。
+     */
+    private function selectOverviewCache($query)
+    {
+        return $query
+            ->selectRaw("COALESCE(SUM({$this->otherInt('cache_tokens')}), 0) as total_cache_tokens")
+            ->selectRaw("COALESCE(SUM({$this->otherInt('cache_creation_tokens')}), 0) as total_cache_creation_tokens")
+            ->selectRaw("COALESCE(SUM({$this->uncachedPromptExpr()}), 0) as total_uncached_prompt_tokens")
+            ->selectRaw("COALESCE(SUM({$this->cacheSavedQuotaExpr()}), 0) as cache_saved_quota");
+    }
+
+    /**
+     * 每日缓存趋势的零填充骨架，保证图表在无数据的日期也有点位。
+     */
+    private function emptyCacheSeries(array $dates): array
+    {
+        return [
+            'cache_tokens' => array_fill_keys($dates, 0),
+            'cache_creation_tokens' => array_fill_keys($dates, 0),
+            'uncached_prompt_tokens' => array_fill_keys($dates, 0),
+        ];
+    }
+
     public function dashboard(Request $request)
     {
         $days = (int) $request->query('days', 7);
@@ -33,15 +155,17 @@ class StatsController extends Controller
         $sinceTimestamp = $since->timestamp;
 
         // 总览数据
-        $overview = DB::table('logs')
+        $overviewQuery = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total_tokens')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
-            ->selectRaw('COUNT(DISTINCT token_name) as active_users')
-            ->first();
+            ->selectRaw('COUNT(DISTINCT token_name) as active_users');
+
+        $overview = $this->selectOverviewCache($overviewQuery)->first();
 
         $overview->total_amount = $this->quotaToAmount($overview->total_quota);
+        $this->applyOverviewCache($overview);
 
         // Top 10 用户用量（按金额排序）
         $topUsers = DB::table('logs')
@@ -93,12 +217,14 @@ class StatsController extends Controller
             ->orderBy('date')
             ->get();
 
-        // 每日总金额
-        $dailyAmounts = DB::table('logs')
+        // 每日总金额（缓存字段合并进同一次扫描）
+        $dailyAmountsQuery = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date')
             ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, SUM(quota) as daily_quota')
-            ->orderBy('date')
+            ->orderBy('date');
+
+        $dailyAmounts = $this->selectDailyCache($dailyAmountsQuery)
             ->get()
             ->keyBy('date');
 
@@ -124,6 +250,18 @@ class StatsController extends Controller
             }
         }
 
+        // 全站每日缓存趋势
+        $dailyCacheData = $this->emptyCacheSeries($dates);
+        foreach ($dates as $date) {
+            $row = $dailyAmounts->get($date);
+            if (!$row) {
+                continue;
+            }
+            $dailyCacheData['cache_tokens'][$date] = (int) $row->daily_cache_tokens;
+            $dailyCacheData['cache_creation_tokens'][$date] = (int) $row->daily_cache_creation_tokens;
+            $dailyCacheData['uncached_prompt_tokens'][$date] = (int) $row->daily_uncached_prompt_tokens;
+        }
+
         return view('admin.dashboard', compact(
             'days',
             'overview',
@@ -134,7 +272,8 @@ class StatsController extends Controller
             'dailyData',
             'dailyAmountData',
             'topUserNames',
-            'dailyAmounts'
+            'dailyAmounts',
+            'dailyCacheData'
         ));
     }
 
@@ -157,19 +296,20 @@ class StatsController extends Controller
         $sinceTimestamp = $since->timestamp;
 
         // 用户总览统计
-        $overview = DB::table('logs')
+        $overviewQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
             ->selectRaw('COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens')
-            ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens')
-            ->first();
+            ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens');
+
+        $overview = $this->selectOverviewCache($overviewQuery)->first();
 
         $overview->total_amount = $this->quotaToAmount($overview->total_quota);
 
         // 每日消费趋势（使用 FROM_UNIXTIME 转换时间戳）
-        $dailyTrend = DB::table('logs')
+        $dailyTrendQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date')
@@ -178,8 +318,9 @@ class StatsController extends Controller
             ->selectRaw('SUM(prompt_tokens) as daily_prompt_tokens')
             ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
             ->selectRaw('COUNT(*) as daily_requests')
-            ->orderBy('date')
-            ->get();
+            ->orderBy('date');
+
+        $dailyTrend = $this->selectDailyCache($dailyTrendQuery)->get();
 
         // 整理日期数据
         $dates = [];
@@ -190,12 +331,12 @@ class StatsController extends Controller
             $current->addDay();
         }
 
-        $dailyData = [
+        $dailyData = array_merge([
             'amounts' => array_fill_keys($dates, 0),
             'requests' => array_fill_keys($dates, 0),
             'prompt_tokens' => array_fill_keys($dates, 0),
             'completion_tokens' => array_fill_keys($dates, 0),
-        ];
+        ], $this->emptyCacheSeries($dates));
 
         foreach ($dailyTrend as $row) {
             if (isset($dailyData['amounts'][$row->date])) {
@@ -205,6 +346,8 @@ class StatsController extends Controller
                 $dailyData['completion_tokens'][$row->date] = (int) $row->daily_completion_tokens;
             }
         }
+
+        $this->applyCacheStats($overview, $dailyData, $dailyTrend);
 
         // 每日模型金额分布（用于堆叠柱图）
         $dailyModelTrend = DB::table('logs')
@@ -308,12 +451,16 @@ class StatsController extends Controller
             ->limit($pageSize)
             ->get()
             ->map(function ($log) {
+                $cache = Log::cacheTokens($log);
+
                 return [
                     'id' => $log->id,
                     'created_at' => date('Y-m-d H:i:s', $log->created_at),
                     'model_name' => $log->model_name,
                     'group' => $log->group,
                     'prompt_tokens' => $log->prompt_tokens,
+                    'cache_tokens' => $cache['cache_tokens'],
+                    'cache_creation_tokens' => $cache['cache_creation_tokens'],
                     'completion_tokens' => $log->completion_tokens,
                     'quota' => $log->quota,
                     'amount' => $this->quotaToAmount($log->quota),
@@ -365,7 +512,7 @@ class StatsController extends Controller
             $out = fopen('php://output', 'w');
             // UTF-8 BOM，避免 Excel 打开中文乱码
             fwrite($out, "\xEF\xBB\xBF");
-            fputcsv($out, ['时间', '模型', '分组', '输入 Tokens', '输出 Tokens', '金额($)', '耗时(秒)', '流式']);
+            fputcsv($out, ['时间', '模型', '分组', '输入 Tokens', '缓存读取 Tokens', '缓存写入 Tokens', '输出 Tokens', '金额($)', '耗时(秒)', '流式']);
 
             // 防止以 = + - @ 开头的文本在 Excel 中被当作公式执行
             $sanitize = function ($value) {
@@ -385,11 +532,14 @@ class StatsController extends Controller
 
             $count = 0;
             foreach ($rows as $log) {
+                $cache = Log::cacheTokens($log);
                 fputcsv($out, [
                     date('Y-m-d H:i:s', $log->created_at),
                     $sanitize($log->model_name),
                     $sanitize($log->group),
                     $log->prompt_tokens,
+                    $cache['cache_tokens'],
+                    $cache['cache_creation_tokens'],
                     $log->completion_tokens,
                     $this->quotaToAmount($log->quota),
                     $log->use_time,
@@ -429,6 +579,8 @@ class StatsController extends Controller
             ->selectRaw('COUNT(*) as requests')
             ->selectRaw('SUM(prompt_tokens) as prompt_tokens')
             ->selectRaw('SUM(completion_tokens) as completion_tokens')
+            ->selectRaw("COALESCE(SUM({$this->otherInt('cache_tokens')}), 0) as cache_tokens")
+            ->selectRaw("COALESCE(SUM({$this->otherInt('cache_creation_tokens')}), 0) as cache_creation_tokens")
             ->orderBy('hour')
             ->get()
             ->keyBy('hour');
@@ -448,6 +600,8 @@ class StatsController extends Controller
                 'amount' => $amount,
                 'requests' => $requests,
                 'prompt_tokens' => $row ? (int) $row->prompt_tokens : 0,
+                'cache_tokens' => $row ? (int) $row->cache_tokens : 0,
+                'cache_creation_tokens' => $row ? (int) $row->cache_creation_tokens : 0,
                 'completion_tokens' => $row ? (int) $row->completion_tokens : 0,
             ];
         }
@@ -514,18 +668,19 @@ class StatsController extends Controller
         $since = Carbon::now()->subDays($days)->startOfDay();
         $sinceTimestamp = $since->timestamp;
 
-        $overview = DB::table('logs')
+        $overviewQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
             ->selectRaw('COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens')
-            ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens')
-            ->first();
+            ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens');
+
+        $overview = $this->selectOverviewCache($overviewQuery)->first();
 
         $overview->total_amount = $this->quotaToAmount($overview->total_quota);
 
-        $dailyTrend = DB::table('logs')
+        $dailyTrendQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date')
@@ -534,8 +689,9 @@ class StatsController extends Controller
             ->selectRaw('SUM(prompt_tokens) as daily_prompt_tokens')
             ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
             ->selectRaw('COUNT(*) as daily_requests')
-            ->orderBy('date')
-            ->get();
+            ->orderBy('date');
+
+        $dailyTrend = $this->selectDailyCache($dailyTrendQuery)->get();
 
         $dates = [];
         $current = $since->copy();
@@ -545,12 +701,12 @@ class StatsController extends Controller
             $current->addDay();
         }
 
-        $dailyData = [
+        $dailyData = array_merge([
             'amounts' => array_fill_keys($dates, 0),
             'requests' => array_fill_keys($dates, 0),
             'prompt_tokens' => array_fill_keys($dates, 0),
             'completion_tokens' => array_fill_keys($dates, 0),
-        ];
+        ], $this->emptyCacheSeries($dates));
 
         foreach ($dailyTrend as $row) {
             if (isset($dailyData['amounts'][$row->date])) {
@@ -560,6 +716,8 @@ class StatsController extends Controller
                 $dailyData['completion_tokens'][$row->date] = (int) $row->daily_completion_tokens;
             }
         }
+
+        $this->applyCacheStats($overview, $dailyData, $dailyTrend);
 
         $dailyModelTrend = DB::table('logs')
             ->where('token_name', $tokenName)
@@ -693,18 +851,19 @@ class StatsController extends Controller
         $since = Carbon::now()->subDays($days)->startOfDay();
         $sinceTimestamp = $since->timestamp;
 
-        $overview = DB::table('logs')
+        $overviewQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
             ->selectRaw('COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens')
-            ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens')
-            ->first();
+            ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens');
+
+        $overview = $this->selectOverviewCache($overviewQuery)->first();
 
         $overview->total_amount = $this->quotaToAmount($overview->total_quota);
 
-        $dailyTrend = DB::table('logs')
+        $dailyTrendQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date')
@@ -713,8 +872,9 @@ class StatsController extends Controller
             ->selectRaw('SUM(prompt_tokens) as daily_prompt_tokens')
             ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
             ->selectRaw('COUNT(*) as daily_requests')
-            ->orderBy('date')
-            ->get();
+            ->orderBy('date');
+
+        $dailyTrend = $this->selectDailyCache($dailyTrendQuery)->get();
 
         $dates = [];
         $current = $since->copy();
@@ -724,12 +884,12 @@ class StatsController extends Controller
             $current->addDay();
         }
 
-        $dailyData = [
+        $dailyData = array_merge([
             'amounts' => array_fill_keys($dates, 0),
             'requests' => array_fill_keys($dates, 0),
             'prompt_tokens' => array_fill_keys($dates, 0),
             'completion_tokens' => array_fill_keys($dates, 0),
-        ];
+        ], $this->emptyCacheSeries($dates));
 
         foreach ($dailyTrend as $row) {
             if (isset($dailyData['amounts'][$row->date])) {
@@ -739,6 +899,8 @@ class StatsController extends Controller
                 $dailyData['completion_tokens'][$row->date] = (int) $row->daily_completion_tokens;
             }
         }
+
+        $this->applyCacheStats($overview, $dailyData, $dailyTrend);
 
         $dailyModelTrend = DB::table('logs')
             ->where('token_name', $tokenName)

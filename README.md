@@ -14,16 +14,26 @@
 | `page` | 页码，默认 1 |
 | `pageSize` | 每页条数，默认 10，上限 1000 |
 
+每条记录返回 `id`、`created_at`、`model_name`、`prompt_tokens`、`cache_tokens`（缓存读取）、
+`cache_creation_tokens`（缓存写入）、`completion_tokens`、`quota`。
+
 ### 后台统计仪表盘
 
 `/admin` — 密码认证的用量统计面板，包含：
 
-- **总览卡片**：总请求数、总 Token 数、活跃用户数
+- **总览卡片**：总请求数、总 Token 数、活跃用户数、缓存命中率
 - **Top 10 用户排行表格**：请求数、Prompt/Completion/总 Tokens、主要模型
 - **柱状图**：Top 10 用户 Token 用量对比
 - **环形图**：模型使用分布
 - **折线图**：Top 10 用户每日用量趋势
+- **缓存利用率趋势**：输入 Tokens 按缓存读取 / 缓存写入 / 未命中拆分的堆叠柱图，叠加命中率曲线与预估节省金额
 - **时间范围切换**：7 / 30 / 90 天
+
+用户详情页（`/admin/user/{tokenName}`、`/usage`、`/user/{apikey}`）同样提供缓存命中率卡片与缓存利用率趋势图，
+日志明细、CSV 导出、每小时明细中均含「缓存读取 / 缓存写入」两列。
+
+> 缓存数据来自 `logs.other`（NewAPI 写入的 JSON），口径与计费公式见 [docs/database-schema.md](docs/database-schema.md)。
+> 「预估节省」对按次计价的模型不适用，会记为 0。
 
 ## 技术栈
 
