@@ -161,10 +161,24 @@
             <h2 class="text-lg font-semibold text-gray-800 mb-1">缓存利用率趋势</h2>
             <p class="text-xs text-gray-400 mb-4">
                 输入 Tokens 按缓存状态拆分（三段之和 = 当日总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
-                区间内预估节省 <span class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
+                <span id="cacheScopeLabel">全部模型</span> 区间内预估节省
+                <span id="cacheSavedAmount" class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
             </p>
             <div class="relative" style="height: 300px;">
                 <canvas id="cacheChart"></canvas>
+            </div>
+
+            {{-- 模型筛选（用量前 5 的模型） --}}
+            <div class="mt-4 flex flex-wrap gap-2">
+                <button type="button" data-model="" class="cache-model-btn px-3 py-1.5 text-sm border rounded-md alz-btn-active">
+                    全部模型
+                </button>
+                @foreach ($cacheModelNames as $model)
+                    <button type="button" data-model="{{ $model }}"
+                        class="cache-model-btn px-3 py-1.5 text-sm border rounded-md bg-white text-gray-700 border-gray-300 alz-btn-day">
+                        {{ $model }}
+                    </button>
+                @endforeach
             </div>
         </div>
     </div>
@@ -314,16 +328,30 @@
         const cacheData = @json($dailyCacheData);
         const fmtTokens = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v;
 
-        const cacheRead = Object.values(cacheData.cache_tokens);
-        const cacheWrite = Object.values(cacheData.cache_creation_tokens);
-        const cacheMiss = Object.values(cacheData.uncached_prompt_tokens);
-        // 命中率 = 缓存读取 / 当日总输入；当日无输入时留空（折线断开）
-        const cacheHitRate = cacheRead.map((read, i) => {
-            const total = read + cacheWrite[i] + cacheMiss[i];
-            return total > 0 ? +(read / total * 100).toFixed(1) : null;
-        });
+        const modelCacheData = @json($modelCacheData);
+        const modelCacheSaved = @json($modelCacheSaved);
+        const allCacheSaved = {{ $overview->cache_saved_amount }};
 
-        new Chart(document.getElementById('cacheChart'), {
+        // 从一份缓存序列里拆出三段柱子与命中率折线
+        // 命中率 = 缓存读取 / 当日总输入；当日无输入时留空（折线断开）
+        function cacheSeries(source) {
+            const read = Object.values(source.cache_tokens);
+            const write = Object.values(source.cache_creation_tokens);
+            const miss = Object.values(source.uncached_prompt_tokens);
+            const rate = read.map((r, i) => {
+                const total = r + write[i] + miss[i];
+                return total > 0 ? +(r / total * 100).toFixed(1) : null;
+            });
+            return { read, write, miss, rate };
+        }
+
+        const initialCache = cacheSeries(cacheData);
+        const cacheRead = initialCache.read;
+        const cacheWrite = initialCache.write;
+        const cacheMiss = initialCache.miss;
+        const cacheHitRate = initialCache.rate;
+
+        const cacheChart = new Chart(document.getElementById('cacheChart'), {
             type: 'bar',
             data: {
                 labels: @json($dates),
@@ -381,6 +409,37 @@
                 }
             }
         });
+
+        // 模型筛选：空值代表全部模型，切换时只换数据不重建图表
+        const fmtAmount = v => v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+        const cacheScopeLabel = document.getElementById('cacheScopeLabel');
+        const cacheSavedAmount = document.getElementById('cacheSavedAmount');
+        const cacheModelBtns = document.querySelectorAll('.cache-model-btn');
+
+        cacheModelBtns.forEach(btn => btn.addEventListener('click', () => {
+            const model = btn.dataset.model;
+            const source = model ? modelCacheData[model] : cacheData;
+            if (!source) return;
+
+            const series = cacheSeries(source);
+            cacheChart.data.datasets[0].data = series.read;
+            cacheChart.data.datasets[1].data = series.write;
+            cacheChart.data.datasets[2].data = series.miss;
+            cacheChart.data.datasets[3].data = series.rate;
+            cacheChart.update();
+
+            cacheScopeLabel.textContent = model || '全部模型';
+            cacheSavedAmount.textContent = '$' + fmtAmount(model ? modelCacheSaved[model] : allCacheSaved);
+
+            cacheModelBtns.forEach(other => {
+                const active = other === btn;
+                other.classList.toggle('alz-btn-active', active);
+                other.classList.toggle('bg-white', !active);
+                other.classList.toggle('text-gray-700', !active);
+                other.classList.toggle('border-gray-300', !active);
+                other.classList.toggle('alz-btn-day', !active);
+            });
+        }));
     </script>
 </body>
 </html>

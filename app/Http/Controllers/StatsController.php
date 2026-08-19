@@ -208,6 +208,19 @@ class StatsController extends Controller
             ->limit(10)
             ->get();
 
+        // 缓存趋势的模型筛选：取用量前 5 的模型，逐模型的每日缓存分段与预估节省
+        $cacheModelNames = $modelDistribution->take(5)->pluck('model_name')->toArray();
+
+        $modelCacheTrendQuery = DB::table('logs')
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->whereIn('model_name', $cacheModelNames)
+            ->groupBy('date', 'model_name')
+            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, model_name')
+            ->selectRaw("COALESCE(SUM({$this->cacheSavedQuotaExpr()}), 0) as daily_cache_saved_quota")
+            ->orderBy('date');
+
+        $modelCacheTrend = $this->selectDailyCache($modelCacheTrendQuery)->get();
+
         // 每日用量趋势（Top 10 用户）
         $dailyTrend = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
@@ -262,6 +275,28 @@ class StatsController extends Controller
             $dailyCacheData['uncached_prompt_tokens'][$date] = (int) $row->daily_uncached_prompt_tokens;
         }
 
+        // 逐模型的每日缓存趋势（供缓存图表的模型筛选按钮切换）
+        $modelCacheData = [];
+        $modelCacheSavedQuota = [];
+        foreach ($cacheModelNames as $model) {
+            $modelCacheData[$model] = $this->emptyCacheSeries($dates);
+            $modelCacheSavedQuota[$model] = 0.0;
+        }
+        foreach ($modelCacheTrend as $row) {
+            if (!isset($modelCacheData[$row->model_name]['cache_tokens'][$row->date])) {
+                continue;
+            }
+            $modelCacheData[$row->model_name]['cache_tokens'][$row->date] = (int) $row->daily_cache_tokens;
+            $modelCacheData[$row->model_name]['cache_creation_tokens'][$row->date] = (int) $row->daily_cache_creation_tokens;
+            $modelCacheData[$row->model_name]['uncached_prompt_tokens'][$row->date] = (int) $row->daily_uncached_prompt_tokens;
+            $modelCacheSavedQuota[$row->model_name] += (float) $row->daily_cache_saved_quota;
+        }
+
+        $modelCacheSaved = [];
+        foreach ($modelCacheSavedQuota as $model => $quota) {
+            $modelCacheSaved[$model] = $this->quotaToAmount((int) round($quota));
+        }
+
         return view('admin.dashboard', compact(
             'days',
             'overview',
@@ -273,7 +308,10 @@ class StatsController extends Controller
             'dailyAmountData',
             'topUserNames',
             'dailyAmounts',
-            'dailyCacheData'
+            'dailyCacheData',
+            'cacheModelNames',
+            'modelCacheData',
+            'modelCacheSaved'
         ));
     }
 
