@@ -62,12 +62,16 @@ return [
     |--------------------------------------------------------------------------
     |
     | Here you may specify the default timezone for your application, which
-    | will be used by the PHP date and date-time functions. We have gone
-    | ahead and set this to a sensible default for you out of the box.
+    | will be used by the PHP date and date-time functions.
+    |
+    | 必须与 newapi 数据库的会话时区一致。logs.created_at 是 Unix 时间戳，
+    | 统计里 PHP 侧用 Carbon 算日期边界、SQL 侧用 DATE(FROM_UNIXTIME(...)) 分组，
+    | 两边时区不同就会错位（原先 PHP=UTC、MySQL=SYSTEM(+08:00)，逐小时明细
+    | 与当日汇总差 8 小时）。改这里时同步确认数据库时区。
     |
     */
 
-    'timezone' => 'UTC',
+    'timezone' => env('APP_TIMEZONE', 'Asia/Shanghai'),
 
     'admin_password' => env('ADMIN_PASSWORD'),
 

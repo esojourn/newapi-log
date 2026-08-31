@@ -73,11 +73,27 @@ ddev exec php artisan route:clear
 ### 缓存统计
 
 缓存用量（命中率、缓存读取/写入 Tokens、预估节省金额）来自 `logs.other` —— NewAPI 写入的
-JSON 字符串列，**没有独立的缓存字段列**。字段含义、计费公式与读取时的 `JSON_VALID` 守卫
-见 `docs/database-schema.md`。
+JSON 字符串列，**没有独立的缓存字段列**。字段含义、计费公式、时区约束与读取时的
+`JSON_VALID` 守卫见 `docs/database-schema.md`。
 
-- SQL 侧的取值表达式集中在 `StatsController` 的 `otherInt()` / `otherRatio()` /
-  `uncachedPromptExpr()` / `cacheSavedQuotaExpr()`，聚合一律合并进现有查询的 `selectRaw`，不额外扫表
+**`prompt_tokens` 是否包含缓存 Token 取决于 `other.usage_semantic`**，不是固定的：
+Anthropic 语义下**不含**，OpenAI 语义下**包含**。判定逻辑在
+`StatsController::promptExcludesCacheExpr()`（SQL 侧）与 `Log::cacheTokens()`（PHP 侧），
+两处口径必须一致。同理，`SUM(prompt_tokens + completion_tokens)` 会漏掉缓存量，
+统计 Token 总量要用 `totalTokensExpr()`。
+
+上游 Go 源码在 `/var/www/html/newapi-vendor`，计费真相在
+`service/text_quota.go` 的 `calculateTextQuotaSummary()`；改计费口径前先读它，
+不要靠数据反推。上游只存 `quota`（已扣费金额），不存"缓存节省了多少"，
+所以预估节省只能本地算。
+
+- SQL 侧的取值表达式集中在 `StatsController` 的 `otherInt()` / `otherIntRaw()` /
+  `otherRatio()` / `uncachedPromptExpr()` / `cacheCreationTotalExpr()` /
+  `totalInputTokensExpr()` / `cacheSavedQuotaExpr()`，聚合一律合并进现有查询的
+  `selectRaw`，不额外扫表
+- `other` 是 longtext，每次 JSON 函数调用在 18 万行上约 1s：组合表达式只在最外层套
+  一次 `OTHER_GUARD`、每个 key 只抽一次，能从已有聚合推导的值（如 `total_tokens`
+  = 三段缓存之和 + 输出）就在 PHP 侧算，别再发一条查询
 - 逐行明细（日志列表、CSV 导出、`/api/log`）走 PHP 侧的 `Log::cacheTokens()` 解析，不用 SQL JSON 函数
 - `userDetail()` / `usage()` / `publicUserDetail()` 是三份几乎相同的副本，新增用户维度统计时
   用 `applyCacheStats()` 这类共用私有方法，避免再复制三遍

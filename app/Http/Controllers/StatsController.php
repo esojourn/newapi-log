@@ -24,16 +24,34 @@ class StatsController extends Controller
     }
 
     /**
-     * 从 logs.other（JSON 字符串）安全取出整数字段的 SQL 表达式。
+     * other 列可安全交给 JSON 函数的守卫条件。
      *
      * other 可能是 NULL、空串或非法 JSON（老日志、充值等非消费类日志），
-     * MySQL 8 对空串调用 JSON_EXTRACT 会直接抛 ERROR 3141，因此必须先用
-     * JSON_VALID 守卫。缺失时返回 0。
+     * MySQL 8 对空串调用 JSON_EXTRACT 会直接抛 ERROR 3141。
+     *
+     * JSON_VALID 在 18 万行上约 1s，与一次 JSON_EXTRACT 同量级，所以组合表达式
+     * （uncachedPromptExpr 等）里只在最外层套一次守卫，不要每个字段各套一遍。
+     */
+    private const OTHER_GUARD = "`other` IS NOT NULL AND `other` <> '' AND JSON_VALID(`other`)";
+
+    /**
+     * 从 logs.other（JSON 字符串）取整数字段，带守卫，缺失时返回 0。
+     *
+     * 单独使用时是安全的；若要和多个字段组合成一个大表达式，用 otherIntRaw()
+     * 并在外层统一套一次 OTHER_GUARD，避免重复解析同一列。
      */
     private function otherInt(string $key): string
     {
-        return "(CASE WHEN `other` IS NOT NULL AND `other` <> '' AND JSON_VALID(`other`)"
-            . " THEN COALESCE(CAST(JSON_EXTRACT(`other`, '$.{$key}') AS SIGNED), 0) ELSE 0 END)";
+        return "(CASE WHEN " . self::OTHER_GUARD
+            . " THEN {$this->otherIntRaw($key)} ELSE 0 END)";
+    }
+
+    /**
+     * 同 otherInt，但不带守卫——只能用在已被 OTHER_GUARD 包住的上下文里。
+     */
+    private function otherIntRaw(string $key): string
+    {
+        return "COALESCE(CAST(JSON_EXTRACT(`other`, '$.{$key}') AS SIGNED), 0)";
     }
 
     /**
@@ -46,14 +64,70 @@ class StatsController extends Controller
     }
 
     /**
-     * 未命中缓存的输入 token 表达式。
+     * prompt_tokens 是否「不含」缓存 token 的判定表达式。
      *
-     * prompt_tokens 已包含缓存读取与缓存写入的 token，三者相减即新输入。
-     * OpenRouter-Claude 特例下上游已扣减过 prompt_tokens，可能算出负数，故 clamp 到 0。
+     * 上游 service/text_quota.go 只在非 Anthropic 语义时才从 baseTokens 里减掉
+     * cache_tokens / cache_creation_tokens，即：
+     *   - usage_semantic = 'anthropic'：prompt_tokens 不含缓存，直接作为新输入计费
+     *   - 语义缺失但带 5m/1h 分档（isLegacyClaudeDerivedOpenAIUsage）：同上
+     *   - 其余（OpenAI 语义）：prompt_tokens 含缓存，需相减
+     *
+     * 早期文档统一按「含缓存」处理，导致 Anthropic 日志的新输入被 GREATEST(0, ...)
+     * 夹成 0、命中率虚高，故按语义分支。
+     */
+    private function promptExcludesCacheExpr(): string
+    {
+        // 语义只抽一次；legacy Claude 派生（语义缺失 + 有 5m/1h 分档）用
+        // cache_write_tokens > cache_creation_tokens 近似判定，省掉两次
+        // JSON_EXTRACT。实测本库该分支 0 行，留着是为了兼容旧上游写入。
+        $semantic = "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(`other`, '$.usage_semantic')), '')";
+
+        return "({$semantic} = 'anthropic' OR ({$semantic} = ''"
+            . " AND {$this->cacheCreationTotalRaw()} > {$this->otherIntRaw('cache_creation_tokens')}))";
+    }
+
+    /**
+     * 未命中缓存的新输入 token 表达式。
+     *
+     * prompt_tokens 是否含缓存由 promptExcludesCacheExpr() 决定；image_output
+     * 在上游同样从 baseTokens 里扣除，单独按 image_ratio 计价，这里一并减掉。
+     * other 非法时回落到 prompt_tokens 原值（无缓存可言）。
      */
     private function uncachedPromptExpr(): string
     {
-        return "GREATEST(0, prompt_tokens - {$this->otherInt('cache_tokens')} - {$this->otherInt('cache_creation_tokens')})";
+        $inner = "GREATEST(0, prompt_tokens - {$this->otherIntRaw('image_output')}"
+            . " - (CASE WHEN {$this->promptExcludesCacheExpr()} THEN 0"
+            . " ELSE {$this->otherIntRaw('cache_tokens')} + {$this->otherIntRaw('cache_creation_tokens')} END))";
+
+        return "(CASE WHEN " . self::OTHER_GUARD . " THEN {$inner} ELSE prompt_tokens END)";
+    }
+
+    /**
+     * 缓存写入总量表达式。
+     *
+     * cache_creation_tokens 只记了 5 分钟那一档，1 小时缓存写在
+     * cache_creation_tokens_1h。上游 cacheWriteTokensTotal() 的口径是：
+     * 有分档时取分档之和（除非合并字段更大），否则取合并字段。
+     */
+    private function cacheCreationTotalExpr(): string
+    {
+        return "(CASE WHEN " . self::OTHER_GUARD
+            . " THEN {$this->cacheCreationTotalRaw()} ELSE 0 END)";
+    }
+
+    /**
+     * 同 cacheCreationTotalExpr，但不带守卫。
+     *
+     * 上游把 cacheWriteTokensTotal() 的结果直接写进 cache_write_tokens，
+     * 实测全表 182797 行与 GREATEST(cache_creation_tokens, 5m + 1h) 完全一致，
+     * 且 88105 个有缓存写入的行无一缺失该字段，所以优先取它——
+     * 一次 JSON_EXTRACT 顶原来三次，18 万行上每次约 1s。
+     * 老日志没有这个字段时回落到合并字段。
+     */
+    private function cacheCreationTotalRaw(): string
+    {
+        return "COALESCE(CAST(JSON_EXTRACT(`other`, '$.cache_write_tokens') AS SIGNED),"
+            . " {$this->otherIntRaw('cache_creation_tokens')})";
     }
 
     /**
@@ -68,6 +142,38 @@ class StatsController extends Controller
         return "(CASE WHEN {$this->otherRatio('model_price', 0)} > 0 THEN 0 ELSE"
             . " {$this->otherInt('cache_tokens')} * (1 - {$this->otherRatio('cache_ratio', 1)})"
             . " * {$this->otherRatio('model_ratio', 0)} * {$this->otherRatio('group_ratio', 1)} END)";
+    }
+
+    /**
+     * 计费口径下的总输入 token 表达式（新输入 + 缓存读取 + 缓存写入）。
+     *
+     * prompt_tokens 在 Anthropic 语义下不含缓存，直接 SUM(prompt_tokens) 会漏掉
+     * 全部缓存量（实测单用户低估约 785%），故统一用三段之和。
+     */
+    private function totalInputTokensExpr(): string
+    {
+        $ct = $this->otherIntRaw('cache_tokens');
+        $cc = $this->otherIntRaw('cache_creation_tokens');
+
+        // 总输入 = 新输入 + 缓存读取 + 缓存写入。
+        // prompt_tokens 含缓存时要先减掉读取与写入（减的是合并字段，与上游
+        // baseTokens.Sub(dCachedCreationTokens) 一致）。
+        $uncached = "GREATEST(0, prompt_tokens - {$this->otherIntRaw('image_output')}"
+            . " - (CASE WHEN {$this->promptExcludesCacheExpr()} THEN 0 ELSE {$ct} + {$cc} END))";
+
+        // 守卫只套一层：JSON_VALID 与 JSON_EXTRACT 同量级（18 万行各约 1s），
+        // 每个字段单独套守卫会让 90 天仪表盘慢好几倍
+        return "(CASE WHEN " . self::OTHER_GUARD
+            . " THEN {$uncached} + {$ct} + {$this->cacheCreationTotalRaw()}"
+            . " ELSE prompt_tokens END)";
+    }
+
+    /**
+     * 计费口径下的总 token 表达式（输入含缓存 + 输出）。
+     */
+    private function totalTokensExpr(): string
+    {
+        return "({$this->totalInputTokensExpr()} + completion_tokens)";
     }
 
     /**
@@ -88,6 +194,12 @@ class StatsController extends Controller
             ? round((int) $overview->total_cache_tokens / $totalInput * 100, 1)
             : null;
         $overview->cache_saved_amount = $this->quotaToAmount((int) round($overview->cache_saved_quota));
+
+        // 总输入就是三段之和，直接复用，不必再让 SQL 跑一遍 totalInputTokensExpr
+        $overview->total_input_tokens = $totalInput;
+        if (isset($overview->total_completion_tokens)) {
+            $overview->total_tokens = $totalInput + (int) $overview->total_completion_tokens;
+        }
     }
 
     /**
@@ -116,7 +228,7 @@ class StatsController extends Controller
     {
         return $query
             ->selectRaw("COALESCE(SUM({$this->otherInt('cache_tokens')}), 0) as daily_cache_tokens")
-            ->selectRaw("COALESCE(SUM({$this->otherInt('cache_creation_tokens')}), 0) as daily_cache_creation_tokens")
+            ->selectRaw("COALESCE(SUM({$this->cacheCreationTotalExpr()}), 0) as daily_cache_creation_tokens")
             ->selectRaw("COALESCE(SUM({$this->uncachedPromptExpr()}), 0) as daily_uncached_prompt_tokens");
     }
 
@@ -127,7 +239,7 @@ class StatsController extends Controller
     {
         return $query
             ->selectRaw("COALESCE(SUM({$this->otherInt('cache_tokens')}), 0) as total_cache_tokens")
-            ->selectRaw("COALESCE(SUM({$this->otherInt('cache_creation_tokens')}), 0) as total_cache_creation_tokens")
+            ->selectRaw("COALESCE(SUM({$this->cacheCreationTotalExpr()}), 0) as total_cache_creation_tokens")
             ->selectRaw("COALESCE(SUM({$this->uncachedPromptExpr()}), 0) as total_uncached_prompt_tokens")
             ->selectRaw("COALESCE(SUM({$this->cacheSavedQuotaExpr()}), 0) as cache_saved_quota");
     }
@@ -158,7 +270,9 @@ class StatsController extends Controller
         $overviewQuery = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
-            ->selectRaw('COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total_tokens')
+            // total_tokens 由 applyOverviewCache() 用三段缓存之和 + 输出算出，
+            // 不在这里再跑一遍 totalTokensExpr（18 万行上能省数秒）
+            ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
             ->selectRaw('COUNT(DISTINCT token_name) as active_users');
 
@@ -168,14 +282,18 @@ class StatsController extends Controller
         $this->applyOverviewCache($overview);
 
         // Top 10 用户用量（按金额排序）
+        // 排除空 token_name：系统日志（type=3 渠道/设置变更、type=7）不带 token，
+        // 混进排行会让视图的 route('admin.user.detail') 缺参数抛 500
         $topUsers = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
+            ->whereNotNull('token_name')
+            ->where('token_name', '<>', '')
             ->groupBy('token_name')
             ->selectRaw('token_name')
             ->selectRaw('COUNT(*) as request_count')
-            ->selectRaw('SUM(prompt_tokens) as prompt_tokens')
+            ->selectRaw("SUM({$this->totalInputTokensExpr()}) as prompt_tokens")
             ->selectRaw('SUM(completion_tokens) as completion_tokens')
-            ->selectRaw('SUM(prompt_tokens + completion_tokens) as total_tokens')
+            ->selectRaw("SUM({$this->totalTokensExpr()}) as total_tokens")
             ->selectRaw('SUM(quota) as total_quota')
             ->orderByDesc('total_quota')
             ->limit(10)
@@ -188,7 +306,7 @@ class StatsController extends Controller
             ->where('created_at', '>=', $sinceTimestamp)
             ->whereIn('token_name', $topUserNames)
             ->groupBy('token_name', 'model_name')
-            ->selectRaw('token_name, model_name, SUM(prompt_tokens + completion_tokens) as tokens')
+            ->selectRaw("token_name, model_name, SUM({$this->totalTokensExpr()}) as tokens")
             ->orderByDesc('tokens')
             ->get()
             ->groupBy('token_name');
@@ -203,7 +321,7 @@ class StatsController extends Controller
         $modelDistribution = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('model_name')
-            ->selectRaw('model_name, SUM(prompt_tokens + completion_tokens) as total_tokens')
+            ->selectRaw("model_name, SUM({$this->totalTokensExpr()}) as total_tokens")
             ->orderByDesc('total_tokens')
             ->limit(10)
             ->get();
@@ -226,7 +344,7 @@ class StatsController extends Controller
             ->where('created_at', '>=', $sinceTimestamp)
             ->whereIn('token_name', $topUserNames)
             ->groupBy('date', 'token_name')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, token_name, SUM(prompt_tokens + completion_tokens) as daily_tokens, SUM(quota) as daily_quota')
+            ->selectRaw("DATE(FROM_UNIXTIME(created_at)) as date, token_name, SUM({$this->totalTokensExpr()}) as daily_tokens, SUM(quota) as daily_quota")
             ->orderBy('date')
             ->get();
 
@@ -339,7 +457,7 @@ class StatsController extends Controller
             ->where('created_at', '>=', $sinceTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
-            ->selectRaw('COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens')
+            ->selectRaw("COALESCE(SUM({$this->totalInputTokensExpr()}), 0) as total_prompt_tokens")
             ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens');
 
         $overview = $this->selectOverviewCache($overviewQuery)->first();
@@ -353,7 +471,7 @@ class StatsController extends Controller
             ->groupBy('date')
             ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date')
             ->selectRaw('SUM(quota) as daily_quota')
-            ->selectRaw('SUM(prompt_tokens) as daily_prompt_tokens')
+            ->selectRaw("SUM({$this->totalInputTokensExpr()}) as daily_prompt_tokens")
             ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
             ->selectRaw('COUNT(*) as daily_requests')
             ->orderBy('date');
@@ -423,7 +541,7 @@ class StatsController extends Controller
             ->selectRaw('model_name')
             ->selectRaw('SUM(quota) as total_quota')
             ->selectRaw('COUNT(*) as request_count')
-            ->selectRaw('SUM(prompt_tokens + completion_tokens) as total_tokens')
+            ->selectRaw("SUM({$this->totalTokensExpr()}) as total_tokens")
             ->orderByDesc('total_quota')
             ->limit(10)
             ->get()
@@ -496,7 +614,9 @@ class StatsController extends Controller
                     'created_at' => date('Y-m-d H:i:s', $log->created_at),
                     'model_name' => $log->model_name,
                     'group' => $log->group,
-                    'prompt_tokens' => $log->prompt_tokens,
+                    // prompt_tokens 在 Anthropic 语义下不含缓存，直接展示会误导，
+                    // 统一改成「未命中的新输入」，与缓存两列同口径
+                    'prompt_tokens' => $cache['uncached_prompt_tokens'],
                     'cache_tokens' => $cache['cache_tokens'],
                     'cache_creation_tokens' => $cache['cache_creation_tokens'],
                     'completion_tokens' => $log->completion_tokens,
@@ -550,7 +670,7 @@ class StatsController extends Controller
             $out = fopen('php://output', 'w');
             // UTF-8 BOM，避免 Excel 打开中文乱码
             fwrite($out, "\xEF\xBB\xBF");
-            fputcsv($out, ['时间', '模型', '分组', '输入 Tokens', '缓存读取 Tokens', '缓存写入 Tokens', '输出 Tokens', '金额($)', '耗时(秒)', '流式']);
+            fputcsv($out, ['时间', '模型', '分组', '新输入 Tokens', '缓存读取 Tokens', '缓存写入 Tokens', '输出 Tokens', '金额($)', '耗时(秒)', '流式']);
 
             // 防止以 = + - @ 开头的文本在 Excel 中被当作公式执行
             $sanitize = function ($value) {
@@ -575,7 +695,7 @@ class StatsController extends Controller
                     date('Y-m-d H:i:s', $log->created_at),
                     $sanitize($log->model_name),
                     $sanitize($log->group),
-                    $log->prompt_tokens,
+                    $cache['uncached_prompt_tokens'],
                     $cache['cache_tokens'],
                     $cache['cache_creation_tokens'],
                     $log->completion_tokens,
@@ -615,10 +735,10 @@ class StatsController extends Controller
             ->selectRaw('HOUR(FROM_UNIXTIME(created_at)) as hour')
             ->selectRaw('SUM(quota) as quota')
             ->selectRaw('COUNT(*) as requests')
-            ->selectRaw('SUM(prompt_tokens) as prompt_tokens')
+            ->selectRaw("SUM({$this->uncachedPromptExpr()}) as prompt_tokens")
             ->selectRaw('SUM(completion_tokens) as completion_tokens')
             ->selectRaw("COALESCE(SUM({$this->otherInt('cache_tokens')}), 0) as cache_tokens")
-            ->selectRaw("COALESCE(SUM({$this->otherInt('cache_creation_tokens')}), 0) as cache_creation_tokens")
+            ->selectRaw("COALESCE(SUM({$this->cacheCreationTotalExpr()}), 0) as cache_creation_tokens")
             ->orderBy('hour')
             ->get()
             ->keyBy('hour');
@@ -711,7 +831,7 @@ class StatsController extends Controller
             ->where('created_at', '>=', $sinceTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
-            ->selectRaw('COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens')
+            ->selectRaw("COALESCE(SUM({$this->totalInputTokensExpr()}), 0) as total_prompt_tokens")
             ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens');
 
         $overview = $this->selectOverviewCache($overviewQuery)->first();
@@ -724,7 +844,7 @@ class StatsController extends Controller
             ->groupBy('date')
             ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date')
             ->selectRaw('SUM(quota) as daily_quota')
-            ->selectRaw('SUM(prompt_tokens) as daily_prompt_tokens')
+            ->selectRaw("SUM({$this->totalInputTokensExpr()}) as daily_prompt_tokens")
             ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
             ->selectRaw('COUNT(*) as daily_requests')
             ->orderBy('date');
@@ -789,7 +909,7 @@ class StatsController extends Controller
             ->selectRaw('model_name')
             ->selectRaw('SUM(quota) as total_quota')
             ->selectRaw('COUNT(*) as request_count')
-            ->selectRaw('SUM(prompt_tokens + completion_tokens) as total_tokens')
+            ->selectRaw("SUM({$this->totalTokensExpr()}) as total_tokens")
             ->orderByDesc('total_quota')
             ->limit(10)
             ->get()
@@ -894,7 +1014,7 @@ class StatsController extends Controller
             ->where('created_at', '>=', $sinceTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
-            ->selectRaw('COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens')
+            ->selectRaw("COALESCE(SUM({$this->totalInputTokensExpr()}), 0) as total_prompt_tokens")
             ->selectRaw('COALESCE(SUM(completion_tokens), 0) as total_completion_tokens');
 
         $overview = $this->selectOverviewCache($overviewQuery)->first();
@@ -907,7 +1027,7 @@ class StatsController extends Controller
             ->groupBy('date')
             ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date')
             ->selectRaw('SUM(quota) as daily_quota')
-            ->selectRaw('SUM(prompt_tokens) as daily_prompt_tokens')
+            ->selectRaw("SUM({$this->totalInputTokensExpr()}) as daily_prompt_tokens")
             ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
             ->selectRaw('COUNT(*) as daily_requests')
             ->orderBy('date');
@@ -972,7 +1092,7 @@ class StatsController extends Controller
             ->selectRaw('model_name')
             ->selectRaw('SUM(quota) as total_quota')
             ->selectRaw('COUNT(*) as request_count')
-            ->selectRaw('SUM(prompt_tokens + completion_tokens) as total_tokens')
+            ->selectRaw("SUM({$this->totalTokensExpr()}) as total_tokens")
             ->orderByDesc('total_quota')
             ->limit(10)
             ->get()

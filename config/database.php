@@ -58,6 +58,10 @@ return [
             'prefix_indexes' => true,
             'strict' => true,
             'engine' => null,
+            // 固定会话时区，别依赖服务器的 SYSTEM 设置。
+            // 统计里 DATE(FROM_UNIXTIME(created_at)) 的分组结果由它决定，
+            // 必须与 config('app.timezone') 指向同一时区，否则日期边界错位。
+            'timezone' => env('DB_TIMEZONE', '+08:00'),
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
             ]) : [],
