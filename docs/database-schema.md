@@ -130,8 +130,10 @@ MySQL 8 对空串调用 `JSON_EXTRACT` 会直接抛 `ERROR 3141`，因此 SQL �
 
 ## 时区
 
-`logs.created_at` 是 Unix 时间戳。统计里 PHP 侧用 Carbon 算日期边界、SQL 侧用
-`DATE(FROM_UNIXTIME(created_at))` 分组，两边时区必须一致，否则日期边界错位：
+`logs.created_at` 是 Unix 时间戳。统计里 PHP 侧用 Carbon 算桶边界、SQL 侧用
+`DATE(FROM_UNIXTIME(created_at))`（1 天范围下是
+`DATE_FORMAT(FROM_UNIXTIME(created_at), '%m-%d %H:00')`）分组，两边时区必须一致，
+否则桶边界错位、且两侧桶键字符串对不上会让图表静默变 0：
 原先 `config/app.php` 是 UTC 而数据库会话是 `SYSTEM`（+08:00），逐小时明细与
 当日汇总能差出 8 小时的量。现在 `app.timezone` 与 `database.connections.mysql.timezone`
 都固定为 +08:00（`APP_TIMEZONE` / `DB_TIMEZONE` 可覆盖），改动时必须同步。

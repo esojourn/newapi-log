@@ -68,7 +68,9 @@ ddev exec php artisan route:clear
 - 路由：`/admin`（需认证）、`/admin/login`、`/admin/logout`
 - 认证方式：简单密码认证，密码通过 `ADMIN_PASSWORD` 环境变量配置
 - 仪表盘功能：Top 10 用户用量排行、模型使用分布、每日用量趋势、缓存利用率趋势
-- 支持 7/30/90 天时间范围切换
+- 支持 1/3/7/30/90 天时间范围切换；**1 天（UI 显示「24小时」）走小时粒度** ——
+  最近 24 个整点桶，其余按自然日。桶边界、桶键与 SQL 分组表达式统一由
+  `StatsController::resolveRange()` 给出，四个统计入口共用
 
 ### 缓存统计
 

@@ -29,7 +29,7 @@
                     @foreach ([1, 3, 7, 30, 90] as $d)
                         <a href="?days={{ $d }}"
                             class="px-3 py-1.5 text-sm border {{ $days == $d ? 'alz-btn-active' : 'bg-white text-gray-700 border-gray-300 alz-btn-day' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
-                            {{ $d }}天
+                            {{ $d == 1 ? '24小时' : $d . '天' }}
                         </a>
                     @endforeach
                 </div>
@@ -128,7 +128,7 @@
 
         {{-- 折线图：每日用量趋势 --}}
         <div class="bg-white rounded-lg shadow p-5">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4">每日用量趋势（Top 10 用户）</h2>
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">{{ $hourly ? '每小时' : '每日' }}用量趋势（Top 10 用户）</h2>
             <div class="relative" style="height: 300px;">
                 <canvas id="lineChart"></canvas>
             </div>
@@ -138,8 +138,8 @@
                 <table class="w-full text-sm">
                     <thead class="alz-thead">
                         <tr>
-                            <th class="text-left px-4 py-2 font-medium">日期</th>
-                            <th class="text-right px-4 py-2 font-medium">每日总金额</th>
+                            <th class="text-left px-4 py-2 font-medium">{{ $hourly ? '时段' : '日期' }}</th>
+                            <th class="text-right px-4 py-2 font-medium">{{ $hourly ? '每小时' : '每日' }}总金额</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y alz-divider">
@@ -160,7 +160,7 @@
         <div class="bg-white rounded-lg shadow p-5">
             <h2 class="text-lg font-semibold text-gray-800 mb-1">缓存利用率趋势</h2>
             <p class="text-xs text-gray-400 mb-4">
-                输入 Tokens 按缓存状态拆分（三段之和 = 当日总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
+                输入 Tokens 按缓存状态拆分（三段之和 = {{ $hourly ? '该时段' : '当日' }}总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
                 <span id="cacheScopeLabel">全部模型</span> 区间内预估节省
                 <span id="cacheSavedAmount" class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
             </p>

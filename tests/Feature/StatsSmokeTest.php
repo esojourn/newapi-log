@@ -31,6 +31,43 @@ class StatsSmokeTest extends TestCase
         }
     }
 
+    /**
+     * days=1 走小时粒度：24 个整点桶，且 SQL 桶键与 PHP 桶键必须逐字一致。
+     *
+     * 格式对不上时页面照样返回 200，只是所有序列静默变 0，所以这里显式比对键。
+     */
+    public function test_one_day_range_buckets_by_hour(): void
+    {
+        $response = $this->asAdmin()->get('/admin?days=1')->assertOk();
+
+        $dates = $response->viewData('dates');
+        $this->assertCount(24, $dates);
+        $this->assertMatchesRegularExpression('/^\d{2}-\d{2} \d{2}:00$/', $dates[0]);
+        $this->assertTrue($response->viewData('hourly'));
+
+        foreach ($response->viewData('dailyAmounts')->keys() as $key) {
+            $this->assertContains(
+                $key,
+                $dates,
+                "SQL 桶键 {$key} 不在 PHP 桶列表中，检查 DATE_FORMAT 与 Carbon 的格式/时区是否一致"
+            );
+        }
+    }
+
+    public function test_multi_day_range_buckets_by_date(): void
+    {
+        $response = $this->asAdmin()->get('/admin?days=7')->assertOk();
+
+        $dates = $response->viewData('dates');
+        $this->assertCount(8, $dates);
+        $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}$/', $dates[0]);
+        $this->assertFalse($response->viewData('hourly'));
+
+        foreach ($response->viewData('dailyAmounts')->keys() as $key) {
+            $this->assertContains($key, $dates, "SQL 桶键 {$key} 不在 PHP 桶列表中");
+        }
+    }
+
     public function test_hourly_breakdown_matches_daily_total(): void
     {
         $token = \Illuminate\Support\Facades\DB::table('logs')

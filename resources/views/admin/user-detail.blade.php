@@ -43,7 +43,7 @@
                     @foreach ([1, 3, 7, 30, 90] as $d)
                         <a href="?days={{ $d }}"
                             class="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm border {{ $days == $d ? 'alz-btn-active' : 'bg-white text-gray-700 border-gray-300 alz-btn-day' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
-                            {{ $d }}天
+                            {{ $d == 1 ? '24小时' : $d . '天' }}
                         </a>
                     @endforeach
                 </div>
@@ -113,7 +113,7 @@
 
             {{-- 消费趋势图 --}}
             <div class="bg-white rounded-lg shadow p-4 sm:p-5">
-                <h2 class="text-lg font-semibold text-gray-800 mb-4">每日消费趋势<span class="text-xs font-normal text-gray-400 ml-2">点击柱状查看每小时明细</span></h2>
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">{{ $hourly ? '每小时' : '每日' }}消费趋势@unless ($hourly)<span class="text-xs font-normal text-gray-400 ml-2">点击柱状查看每小时明细</span>@endunless</h2>
                 <div id="trendChartContainer" style="position: relative;">
                     <canvas id="trendChart"></canvas>
                 </div>
@@ -123,7 +123,7 @@
             <div class="bg-white rounded-lg shadow p-4 sm:p-5">
                 <h2 class="text-lg font-semibold text-gray-800 mb-1">缓存利用率趋势</h2>
                 <p class="text-xs text-gray-400 mb-4">
-                    输入 Tokens 按缓存状态拆分（三段之和 = 当日总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
+                    输入 Tokens 按缓存状态拆分（三段之和 = {{ $hourly ? '该时段' : '当日' }}总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
                     区间内预估节省 <span class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
                 </p>
                 <div id="cacheChartContainer" style="position: relative;">
@@ -293,6 +293,8 @@
         const dailyModelData = @json($dailyModelData);
         const dailyModelNames = @json($dailyModelNames);
         const dates = @json($dates);
+        // 小时模式下横轴已是整点桶，标签形如 '09-01 14:00'，不能再透传给 ?date= 下钻
+        const isHourly = @json($hourly);
 
         // 为每个模型生成一个堆叠柱图 dataset
         const modelBarDatasets = dailyModelNames.map((model, i) => ({
@@ -327,6 +329,8 @@
                 if (barDatasets.length === 0) return;
 
                 const numPoints = data.labels.length;
+                // 按每个标签能分到的像素宽度决定隔几根画一次，桶数多时自动稀释
+                const stride = Math.max(1, Math.ceil(numPoints / Math.max(1, Math.floor(chart.width / 48))));
                 ctx.save();
                 ctx.font = isMobile ? 'bold 9px sans-serif' : 'bold 11px sans-serif';
                 ctx.fillStyle = '#374151';
@@ -334,8 +338,7 @@
                 ctx.textBaseline = 'bottom';
 
                 for (let i = 0; i < numPoints; i++) {
-                    // 天数多且屏幕窄时隔一个显示
-                    if (numPoints > 14 && chart.width < 500 && i % 2 !== 0) continue;
+                    if (i % stride !== 0) continue;
                     let total = 0;
                     barDatasets.forEach(ds => {
                         const val = ds.data[i];
@@ -362,9 +365,10 @@
                 maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
                 onHover: (event, elements) => {
-                    event.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+                    event.native.target.style.cursor = !isHourly && elements.length ? 'pointer' : 'default';
                 },
                 onClick: (event, elements, chart) => {
+                    if (isHourly) return;
                     const points = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, true);
                     if (points.length === 0) return;
                     const date = dates[points[0].index];

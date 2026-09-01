@@ -16,6 +16,11 @@ class StatsController extends Controller
     private const EXPORT_MAX_DAYS = 7;
 
     /**
+     * 时间范围切换的可选天数；1 天走小时粒度，见 resolveRange()
+     */
+    private const RANGE_DAYS = [1, 3, 7, 30, 90];
+
+    /**
      * 将 quota 转换为金额（quota / 500000）
      */
     private function quotaToAmount(int $quota): float
@@ -256,15 +261,44 @@ class StatsController extends Controller
         ];
     }
 
-    public function dashboard(Request $request)
+    /**
+     * 解析 days 参数，返回 [天数, 是否小时粒度, 起始时间戳, 时间桶表达式, 桶键列表]。
+     *
+     * days=1 走小时粒度：从当前整点往前推 23 小时，共 24 个整点桶（末桶是当前不完整的小时）；
+     * 其余天数仍按自然日分桶。dashboard / userDetail / usage / publicUserDetail 四处共用。
+     *
+     * 桶键格式 'm-d H:00' 在 24 小时窗口内唯一，可直接当图表标签用，但它必须与 SQL 的
+     * DATE_FORMAT 输出逐字一致 —— 否则 applyCacheStats() 等按键合并会静默落空、图表全 0。
+     * 两侧时区都是 +08:00（config/app.php 与 database.connections.mysql.timezone）。
+     */
+    private function resolveRange(Request $request): array
     {
         $days = (int) $request->query('days', 7);
-        if (!in_array($days, [1, 3, 7, 30, 90])) {
+        if (!in_array($days, self::RANGE_DAYS, true)) {
             $days = 1;
         }
 
-        $since = Carbon::now()->subDays($days)->startOfDay();
-        $sinceTimestamp = $since->timestamp;
+        $hourly = $days === 1;
+        $now = Carbon::now();
+        $since = $hourly
+            ? $now->copy()->startOfHour()->subHours(23)
+            : $now->copy()->subDays($days)->startOfDay();
+
+        $bucketExpr = $hourly
+            ? "DATE_FORMAT(FROM_UNIXTIME(created_at), '%m-%d %H:00')"
+            : 'DATE(FROM_UNIXTIME(created_at))';
+
+        $dates = [];
+        for ($current = $since->copy(); $current->lte($now); $hourly ? $current->addHour() : $current->addDay()) {
+            $dates[] = $hourly ? $current->format('m-d H') . ':00' : $current->format('Y-m-d');
+        }
+
+        return [$days, $hourly, $since->timestamp, $bucketExpr, $dates];
+    }
+
+    public function dashboard(Request $request)
+    {
+        [$days, $hourly, $sinceTimestamp, $bucketExpr, $dates] = $this->resolveRange($request);
 
         // 总览数据
         $overviewQuery = DB::table('logs')
@@ -333,7 +367,7 @@ class StatsController extends Controller
             ->where('created_at', '>=', $sinceTimestamp)
             ->whereIn('model_name', $cacheModelNames)
             ->groupBy('date', 'model_name')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, model_name')
+            ->selectRaw("{$bucketExpr} as date, model_name")
             ->selectRaw("COALESCE(SUM({$this->cacheSavedQuotaExpr()}), 0) as daily_cache_saved_quota")
             ->orderBy('date');
 
@@ -344,7 +378,7 @@ class StatsController extends Controller
             ->where('created_at', '>=', $sinceTimestamp)
             ->whereIn('token_name', $topUserNames)
             ->groupBy('date', 'token_name')
-            ->selectRaw("DATE(FROM_UNIXTIME(created_at)) as date, token_name, SUM({$this->totalTokensExpr()}) as daily_tokens, SUM(quota) as daily_quota")
+            ->selectRaw("{$bucketExpr} as date, token_name, SUM({$this->totalTokensExpr()}) as daily_tokens, SUM(quota) as daily_quota")
             ->orderBy('date')
             ->get();
 
@@ -352,7 +386,7 @@ class StatsController extends Controller
         $dailyAmountsQuery = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, SUM(quota) as daily_quota')
+            ->selectRaw("{$bucketExpr} as date, SUM(quota) as daily_quota")
             ->orderBy('date');
 
         $dailyAmounts = $this->selectDailyCache($dailyAmountsQuery)
@@ -360,14 +394,6 @@ class StatsController extends Controller
             ->keyBy('date');
 
         // 整理每日趋势数据为图表格式
-        $dates = [];
-        $current = $since->copy();
-        $now = Carbon::now();
-        while ($current->lte($now)) {
-            $dates[] = $current->format('Y-m-d');
-            $current->addDay();
-        }
-
         $dailyData = [];
         $dailyAmountData = [];
         foreach ($topUserNames as $name) {
@@ -417,6 +443,7 @@ class StatsController extends Controller
 
         return view('admin.dashboard', compact(
             'days',
+            'hourly',
             'overview',
             'topUsers',
             'primaryModels',
@@ -438,18 +465,12 @@ class StatsController extends Controller
      */
     public function userDetail(Request $request, string $tokenName)
     {
-        $days = (int) $request->query('days', 7);
-        if (!in_array($days, [1, 3,7, 30, 90])) {
-            $days = 1;
-        }
+        [$days, $hourly, $sinceTimestamp, $bucketExpr, $dates] = $this->resolveRange($request);
 
         $token = Token::where('name', $tokenName)->first();
         $balance = $token
             ? ($token->unlimited_quota ? '无限' : '$' . number_format($token->remain_quota / 500000, 4))
             : '-';
-
-        $since = Carbon::now()->subDays($days)->startOfDay();
-        $sinceTimestamp = $since->timestamp;
 
         // 用户总览统计
         $overviewQuery = DB::table('logs')
@@ -464,12 +485,12 @@ class StatsController extends Controller
 
         $overview->total_amount = $this->quotaToAmount($overview->total_quota);
 
-        // 每日消费趋势（使用 FROM_UNIXTIME 转换时间戳）
+        // 消费趋势（按 resolveRange() 给出的时间桶分组：自然日或整点小时）
         $dailyTrendQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date')
+            ->selectRaw("{$bucketExpr} as date")
             ->selectRaw('SUM(quota) as daily_quota')
             ->selectRaw("SUM({$this->totalInputTokensExpr()}) as daily_prompt_tokens")
             ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
@@ -477,15 +498,6 @@ class StatsController extends Controller
             ->orderBy('date');
 
         $dailyTrend = $this->selectDailyCache($dailyTrendQuery)->get();
-
-        // 整理日期数据
-        $dates = [];
-        $current = $since->copy();
-        $now = Carbon::now();
-        while ($current->lte($now)) {
-            $dates[] = $current->format('Y-m-d');
-            $current->addDay();
-        }
 
         $dailyData = array_merge([
             'amounts' => array_fill_keys($dates, 0),
@@ -510,7 +522,7 @@ class StatsController extends Controller
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date', 'model_name')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, model_name, SUM(quota) as daily_quota')
+            ->selectRaw("{$bucketExpr} as date, model_name, SUM(quota) as daily_quota")
             ->orderBy('date')
             ->get();
 
@@ -575,6 +587,7 @@ class StatsController extends Controller
         return view('admin.user-detail', compact(
             'tokenName',
             'days',
+            'hourly',
             'overview',
             'dates',
             'dailyData',
@@ -818,13 +831,7 @@ class StatsController extends Controller
             ? '无限'
             : '$' . number_format($token->remain_quota / 500000, 4);
 
-        $days = (int) $request->query('days', 7);
-        if (!in_array($days, [1, 3, 7, 30, 90])) {
-            $days = 1;
-        }
-
-        $since = Carbon::now()->subDays($days)->startOfDay();
-        $sinceTimestamp = $since->timestamp;
+        [$days, $hourly, $sinceTimestamp, $bucketExpr, $dates] = $this->resolveRange($request);
 
         $overviewQuery = DB::table('logs')
             ->where('token_name', $tokenName)
@@ -842,7 +849,7 @@ class StatsController extends Controller
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date')
+            ->selectRaw("{$bucketExpr} as date")
             ->selectRaw('SUM(quota) as daily_quota')
             ->selectRaw("SUM({$this->totalInputTokensExpr()}) as daily_prompt_tokens")
             ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
@@ -850,14 +857,6 @@ class StatsController extends Controller
             ->orderBy('date');
 
         $dailyTrend = $this->selectDailyCache($dailyTrendQuery)->get();
-
-        $dates = [];
-        $current = $since->copy();
-        $now = Carbon::now();
-        while ($current->lte($now)) {
-            $dates[] = $current->format('Y-m-d');
-            $current->addDay();
-        }
 
         $dailyData = array_merge([
             'amounts' => array_fill_keys($dates, 0),
@@ -881,7 +880,7 @@ class StatsController extends Controller
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date', 'model_name')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, model_name, SUM(quota) as daily_quota')
+            ->selectRaw("{$bucketExpr} as date, model_name, SUM(quota) as daily_quota")
             ->orderBy('date')
             ->get();
 
@@ -943,6 +942,7 @@ class StatsController extends Controller
         return view('admin.user-detail', compact(
             'tokenName',
             'days',
+            'hourly',
             'overview',
             'dates',
             'dailyData',
@@ -1001,13 +1001,7 @@ class StatsController extends Controller
             ? '无限'
             : '$' . number_format($token->remain_quota / 500000, 4);
 
-        $days = (int) $request->query('days', 7);
-        if (!in_array($days, [1, 3, 7, 30, 90])) {
-            $days = 1;
-        }
-
-        $since = Carbon::now()->subDays($days)->startOfDay();
-        $sinceTimestamp = $since->timestamp;
+        [$days, $hourly, $sinceTimestamp, $bucketExpr, $dates] = $this->resolveRange($request);
 
         $overviewQuery = DB::table('logs')
             ->where('token_name', $tokenName)
@@ -1025,7 +1019,7 @@ class StatsController extends Controller
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date')
+            ->selectRaw("{$bucketExpr} as date")
             ->selectRaw('SUM(quota) as daily_quota')
             ->selectRaw("SUM({$this->totalInputTokensExpr()}) as daily_prompt_tokens")
             ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
@@ -1033,14 +1027,6 @@ class StatsController extends Controller
             ->orderBy('date');
 
         $dailyTrend = $this->selectDailyCache($dailyTrendQuery)->get();
-
-        $dates = [];
-        $current = $since->copy();
-        $now = Carbon::now();
-        while ($current->lte($now)) {
-            $dates[] = $current->format('Y-m-d');
-            $current->addDay();
-        }
 
         $dailyData = array_merge([
             'amounts' => array_fill_keys($dates, 0),
@@ -1064,7 +1050,7 @@ class StatsController extends Controller
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
             ->groupBy('date', 'model_name')
-            ->selectRaw('DATE(FROM_UNIXTIME(created_at)) as date, model_name, SUM(quota) as daily_quota')
+            ->selectRaw("{$bucketExpr} as date, model_name, SUM(quota) as daily_quota")
             ->orderBy('date')
             ->get();
 
@@ -1125,6 +1111,7 @@ class StatsController extends Controller
         return view('admin.user-detail', compact(
             'tokenName',
             'days',
+            'hourly',
             'overview',
             'dates',
             'dailyData',
