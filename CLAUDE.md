@@ -66,11 +66,14 @@ ddev exec php artisan route:clear
 ### 后台统计
 
 - 路由：`/admin`（需认证）、`/admin/login`、`/admin/logout`
-- 认证方式：简单密码认证，密码通过 `ADMIN_PASSWORD` 环境变量配置
+- 认证方式：简单密码认证，密码通过 `ADMIN_PASSWORD` 环境变量配置；
+  登录后除 session 外还下发 30 天长效 cookie（`AdminAuth::REMEMBER_COOKIE`，值是
+  `ADMIN_PASSWORD` + `APP_KEY` 的 HMAC），session 过期时由 `AdminAuth` 免密续期
 - 仪表盘功能：Top 10 用户用量排行、模型使用分布、每日用量趋势、缓存利用率趋势
-- 支持 1/3/7/30/90 天时间范围切换；**1 天（UI 显示「24小时」）走小时粒度** ——
+- 支持 1/3/7/30/90 天时间范围切换，**缺省 1 天**（窗口最小、装载最快）；**1 天（UI 显示「24小时」）走小时粒度** ——
   最近 24 个整点桶，其余按自然日。桶边界、桶键与 SQL 分组表达式统一由
   `StatsController::resolveRange()` 给出，四个统计入口共用
+- 时间范围要跨页保留：仪表盘 → 用户详情、用户详情 → 仪表盘的链接都要带上 `days`
 
 ### 缓存统计
 

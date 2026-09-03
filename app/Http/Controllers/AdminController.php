@@ -2,13 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Middleware\AdminAuth;
 use Illuminate\Http\Request;
 
 class AdminController extends Controller
 {
-    public function showLogin()
+    public function showLogin(Request $request)
     {
-        if (session('admin_authenticated')) {
+        if (session('admin_authenticated') || AdminAuth::tokenMatches($request->cookie(AdminAuth::REMEMBER_COOKIE))) {
             return redirect()->route('admin.dashboard');
         }
 
@@ -31,15 +32,17 @@ class AdminController extends Controller
             return back()->withErrors(['password' => '密码错误']);
         }
 
+        $request->session()->regenerate();
         $request->session()->put('admin_authenticated', true);
 
-        return redirect()->route('admin.dashboard');
+        // 同时下发长效 cookie：session 过期后 AdminAuth 会据此免密续期
+        return redirect()->route('admin.dashboard')->withCookie(AdminAuth::rememberCookie());
     }
 
     public function logout(Request $request)
     {
         $request->session()->forget('admin_authenticated');
 
-        return redirect()->route('admin.login');
+        return redirect()->route('admin.login')->withCookie(AdminAuth::forgetCookie());
     }
 }

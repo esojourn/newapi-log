@@ -264,6 +264,7 @@ class StatsController extends Controller
     /**
      * 解析 days 参数，返回 [天数, 是否小时粒度, 起始时间戳, 时间桶表达式, 桶键列表]。
      *
+     * 缺省 days=1（最近 24 小时）—— 窗口最小、装载最快，页面再由用户手动切到更长范围。
      * days=1 走小时粒度：从当前整点往前推 23 小时，共 24 个整点桶（末桶是当前不完整的小时）；
      * 其余天数仍按自然日分桶。dashboard / userDetail / usage / publicUserDetail 四处共用。
      *
@@ -273,7 +274,7 @@ class StatsController extends Controller
      */
     private function resolveRange(Request $request): array
     {
-        $days = (int) $request->query('days', 7);
+        $days = (int) $request->query('days', 1);
         if (!in_array($days, self::RANGE_DAYS, true)) {
             $days = 1;
         }

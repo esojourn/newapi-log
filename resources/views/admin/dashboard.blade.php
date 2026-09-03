@@ -94,7 +94,7 @@
                             <tr class="alz-tr">
                                 <td class="px-5 py-3 text-gray-500">{{ $i + 1 }}</td>
                                 <td class="px-5 py-3 font-medium alz-link">
-                                    <a href="{{ route('admin.user.detail', ['tokenName' => $user->token_name]) }}">
+                                    <a href="{{ route('admin.user.detail', ['tokenName' => $user->token_name, 'days' => $days]) }}">
                                         {{ $user->token_name }}
                                     </a>
                                 </td>
