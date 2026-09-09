@@ -132,9 +132,12 @@ class FeishuNotifier
     /**
      * 管理员汇总卡片：一次检查里所有命中的 Key 合并成一条，避免刷屏。
      *
+     * 这张卡片刻意不带后台链接：群消息会被转发、截图、留在聊天记录里，
+     * 后台地址不该跟着一起扩散。管理员知道自己的入口在哪。
+     *
      * @param  array<int, array{name: string, remain: int, threshold: int}>  $rows
      */
-    public function adminSummaryCard(array $rows, ?string $linkUrl = null): array
+    public function adminSummaryCard(array $rows): array
     {
         $lines = [];
         foreach ($rows as $row) {
@@ -155,10 +158,6 @@ class FeishuNotifier
                 ],
             ],
         ];
-
-        if ($button = self::linkButton('打开预警管理', $linkUrl)) {
-            $elements[] = $button;
-        }
 
         $elements[] = ['tag' => 'hr'];
         $elements[] = [

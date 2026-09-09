@@ -185,6 +185,29 @@ class AlertsTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_admin_card_carries_no_backend_link(): void
+    {
+        $this->fakeFeishu();
+
+        config(['app.url' => 'https://api-log.example']);
+
+        AlertSetting::setValue(AlertSetting::ADMIN_ENABLED, '1');
+        AlertSetting::setValue(AlertSetting::ADMIN_WEBHOOK_URL, self::HOOK);
+        AlertSetting::setValue(AlertSetting::ADMIN_DEFAULT_THRESHOLD_QUOTA, (string) Quota::fromAmount(5));
+
+        AlertAdminWatch::create(['token_id' => 1, 'token_name' => 'a']);
+
+        $this->checker([$this->token(1, 'a', Quota::fromAmount(1))])->run();
+
+        // 群消息会被转发、截图、留在聊天记录里，后台地址不该跟着一起扩散
+        Http::assertSent(function ($request) {
+            $body = json_encode($request->data(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+            return strpos($body, 'api-log.example') === false
+                && strpos($body, '/admin') === false;
+        });
+    }
+
     public function test_admin_side_inactive_without_webhook(): void
     {
         Http::fake();
