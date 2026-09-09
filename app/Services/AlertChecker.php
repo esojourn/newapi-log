@@ -201,7 +201,7 @@ class AlertChecker
         $result = $this->feishu->send(
             $adminUrl,
             AlertSetting::adminWebhookSecret(),
-            $this->feishu->adminSummaryCard($rows, $this->link('/admin/alerts'))
+            $this->feishu->adminSummaryCard($rows)
         );
 
         foreach ($hits as $index => $watch) {

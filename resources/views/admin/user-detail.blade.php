@@ -29,7 +29,7 @@
         <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2">
             <div class="flex items-center gap-3">
                 @if(!isset($isPublic) || !$isPublic)
-                <a href="{{ route('admin.dashboard', ['days' => $days]) }}" class="text-gray-500 hover:text-gray-700">
+                <a href="{{ route('admin.dashboard', ['days' => $days, $range['param'] => $range['anchored'] ? $range['value'] : null]) }}" class="text-gray-500 hover:text-gray-700">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
                     </svg>
@@ -38,15 +38,8 @@
                 <h1 class="text-xl font-bold text-gray-800">{{ $tokenName }}</h1>
             </div>
             <div class="flex items-center gap-3">
-                {{-- 时间范围切换 --}}
-                <div class="flex rounded-md shadow-sm">
-                    @foreach ([1, 3, 7, 30, 90] as $d)
-                        <a href="?days={{ $d }}"
-                            class="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm border {{ $days == $d ? 'alz-btn-active' : 'bg-white text-gray-700 border-gray-300 alz-btn-day' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
-                            {{ $d == 1 ? '24小时' : $d . '天' }}
-                        </a>
-                    @endforeach
-                </div>
+                {{-- 时间范围切换 + 基准时间 --}}
+                @include('partials.range-picker')
                 @if(isset($isSession) && $isSession)
                 {{-- 通知设置 --}}
                 <a href="{{ route('user.alerts') }}" class="text-sm text-gray-500 hover:text-gray-700 transition">通知设置</a>
