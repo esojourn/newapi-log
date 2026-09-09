@@ -81,6 +81,10 @@ class AlertsTest extends TestCase
 
     public function test_dedupes_within_remind_window_then_resends_after_it(): void
     {
+        // 固定复发间隔，别跟着部署环境的 ALERT_REMIND_HOURS 变：
+        // 生产上可以配成 0（不去重、由 cron 决定节奏），那样这个用例就没窗口可测了
+        config(['alerts.remind_hours' => 24]);
+
         $this->fakeFeishu();
 
         $subscription = $this->subscription();
