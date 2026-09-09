@@ -264,11 +264,22 @@ class StatsController extends Controller
     }
 
     /**
-     * 解析 days 参数，返回 [天数, 是否小时粒度, 起始时间戳, 时间桶表达式, 桶键列表]。
+     * 基准时间（窗口右端）的查询参数名。缺省是「现在」，即跟随最新数据。
+     */
+    private const ANCHOR_PARAM = 'at';
+
+    /**
+     * 解析 days + 基准时间，返回
+     * [天数, 是否小时粒度, 起始时间戳, 结束时间戳(不含), 时间桶表达式, 桶键列表, 基准时间控件数据]。
      *
      * 缺省 days=1（最近 24 小时）—— 窗口最小、装载最快，页面再由用户手动切到更长范围。
-     * days=1 走小时粒度：从当前整点往前推 23 小时，共 24 个整点桶（末桶是当前不完整的小时）；
-     * 其余天数仍按自然日分桶。dashboard / userDetail / usage / publicUserDetail 四处共用。
+     * days=1 走小时粒度：从基准整点往前推 23 小时，共 24 个整点桶；其余天数仍按自然日分桶。
+     * dashboard / userDetail / usage / publicUserDetail 四处共用。
+     *
+     * 基准时间（`at`）把窗口右端从「现在」挪到过去某一刻，用来回看前几天的逐小时明细。
+     * 它落到所在的整点/整日上，且**该桶完整计入**：at=2026-05-01 15:30 且 days=1 时窗口是
+     * 04-30 16:00 ~ 05-01 16:00。未锚定时右端取当前小时/当天的末尾（在未来），
+     * 因为日志不会晚于现在，这样既省掉一次夹取又不会漏掉当前这一秒的记录。
      *
      * 桶键格式 'm-d H:00' 在 24 小时窗口内唯一，可直接当图表标签用，但它必须与 SQL 的
      * DATE_FORMAT 输出逐字一致 —— 否则 applyCacheStats() 等按键合并会静默落空、图表全 0。
@@ -283,29 +294,101 @@ class StatsController extends Controller
 
         $hourly = $days === 1;
         $now = Carbon::now();
-        $since = $hourly
-            ? $now->copy()->startOfHour()->subHours(23)
-            : $now->copy()->subDays($days)->startOfDay();
+        $anchor = $this->resolveAnchor($request, $now);
+
+        // 窗口右端所在的桶：小时粒度取整点，日粒度取零点；该桶本身算在窗口内
+        $end = $hourly
+            ? ($anchor ?? $now)->copy()->startOfHour()
+            : ($anchor ?? $now)->copy()->startOfDay();
+
+        $since = $hourly ? $end->copy()->subHours(23) : $end->copy()->subDays($days);
+        $until = $hourly ? $end->copy()->addHour() : $end->copy()->addDay();
 
         $bucketExpr = $hourly
             ? "DATE_FORMAT(FROM_UNIXTIME(created_at), '%m-%d %H:00')"
             : 'DATE(FROM_UNIXTIME(created_at))';
 
         $dates = [];
-        for ($current = $since->copy(); $current->lte($now); $hourly ? $current->addHour() : $current->addDay()) {
+        for ($current = $since->copy(); $current->lte($end); $hourly ? $current->addHour() : $current->addDay()) {
             $dates[] = $hourly ? $current->format('m-d H') . ':00' : $current->format('Y-m-d');
         }
 
-        return [$days, $hourly, $since->timestamp, $bucketExpr, $dates];
+        $range = $this->rangeNav($hourly, $anchor, $end, $since, $now, count($dates));
+
+        return [$days, $hourly, $since->timestamp, $until->timestamp, $bucketExpr, $dates, $range];
+    }
+
+    /**
+     * 解析基准时间参数，非法或未来时间一律回落到 null（= 跟随最新）。
+     *
+     * 接受 datetime-local 提交的 'Y-m-d\TH:i'（部分浏览器带秒）、空格分隔的同格式，
+     * 以及只给日期的 'Y-m-d'（视为当天最后一个整点，于是 days=1 正好覆盖那一整天）。
+     */
+    private function resolveAnchor(Request $request, Carbon $now): ?Carbon
+    {
+        $raw = trim((string) $request->query(self::ANCHOR_PARAM, ''));
+        if ($raw === '') {
+            return null;
+        }
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
+            $raw .= ' 23:00';
+        }
+
+        try {
+            $anchor = Carbon::createFromFormat('Y-m-d H:i', substr(str_replace('T', ' ', $raw), 0, 16));
+        } catch (\Exception $e) {
+            return null;
+        }
+
+        if (!$anchor instanceof Carbon || $anchor->gt($now)) {
+            // 未来时间没有日志，回落到最新，免得「下一段」把窗口推进空白区
+            return null;
+        }
+
+        return $anchor;
+    }
+
+    /**
+     * 基准时间控件的视图数据：输入框回填值、上/下一段的取值、窗口文字说明。
+     *
+     * 上/下一段按整窗步进（小时粒度 24 小时，日粒度 count($dates) 天），前后窗口不重叠；
+     * 已经贴着最新数据时 next 为 null，视图据此禁用按钮。
+     */
+    private function rangeNav(bool $hourly, ?Carbon $anchor, Carbon $end, Carbon $since, Carbon $now, int $buckets): array
+    {
+        $latest = $hourly ? $now->copy()->startOfHour() : $now->copy()->startOfDay();
+        $step = fn (int $sign) => $hourly
+            ? $end->copy()->addHours(24 * $sign)
+            : $end->copy()->addDays($buckets * $sign);
+
+        $next = null;
+        if ($end->lt($latest)) {
+            $forward = $step(1);
+            $next = ($forward->gt($latest) ? $latest : $forward)->format('Y-m-d\TH:i');
+        }
+
+        return [
+            'param' => self::ANCHOR_PARAM,
+            'anchored' => $anchor !== null,
+            'value' => ($anchor ?? $now)->format('Y-m-d\TH:00'),
+            'max' => $now->format('Y-m-d\TH:i'),
+            'prev' => $step(-1)->format('Y-m-d\TH:i'),
+            'next' => $next,
+            'label' => $hourly
+                ? $since->format('m-d H:00') . ' ~ ' . $end->format('m-d H:00')
+                : $since->format('Y-m-d') . ' ~ ' . $end->format('Y-m-d'),
+        ];
     }
 
     public function dashboard(Request $request)
     {
-        [$days, $hourly, $sinceTimestamp, $bucketExpr, $dates] = $this->resolveRange($request);
+        [$days, $hourly, $sinceTimestamp, $untilTimestamp, $bucketExpr, $dates, $range] = $this->resolveRange($request);
 
         // 总览数据
         $overviewQuery = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             // total_tokens 由 applyOverviewCache() 用三段缓存之和 + 输出算出，
             // 不在这里再跑一遍 totalTokensExpr（18 万行上能省数秒）
@@ -323,6 +406,7 @@ class StatsController extends Controller
         // 混进排行会让视图的 route('admin.user.detail') 缺参数抛 500
         $topUsers = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->whereNotNull('token_name')
             ->where('token_name', '<>', '')
             ->groupBy('token_name')
@@ -341,6 +425,7 @@ class StatsController extends Controller
         // Top 10 用户的主要模型
         $userModels = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->whereIn('token_name', $topUserNames)
             ->groupBy('token_name', 'model_name')
             ->selectRaw("token_name, model_name, SUM({$this->totalTokensExpr()}) as tokens")
@@ -357,6 +442,7 @@ class StatsController extends Controller
         // 模型使用分布（全局）
         $modelDistribution = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('model_name')
             ->selectRaw("model_name, SUM({$this->totalTokensExpr()}) as total_tokens")
             ->orderByDesc('total_tokens')
@@ -368,6 +454,7 @@ class StatsController extends Controller
 
         $modelCacheTrendQuery = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->whereIn('model_name', $cacheModelNames)
             ->groupBy('date', 'model_name')
             ->selectRaw("{$bucketExpr} as date, model_name")
@@ -379,6 +466,7 @@ class StatsController extends Controller
         // 每日用量趋势（Top 10 用户）
         $dailyTrend = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->whereIn('token_name', $topUserNames)
             ->groupBy('date', 'token_name')
             ->selectRaw("{$bucketExpr} as date, token_name, SUM({$this->totalTokensExpr()}) as daily_tokens, SUM(quota) as daily_quota")
@@ -388,6 +476,7 @@ class StatsController extends Controller
         // 每日总金额（缓存字段合并进同一次扫描）
         $dailyAmountsQuery = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('date')
             ->selectRaw("{$bucketExpr} as date, SUM(quota) as daily_quota")
             ->orderBy('date');
@@ -447,6 +536,7 @@ class StatsController extends Controller
         return view('admin.dashboard', compact(
             'days',
             'hourly',
+            'range',
             'overview',
             'topUsers',
             'primaryModels',
@@ -468,7 +558,7 @@ class StatsController extends Controller
      */
     public function userDetail(Request $request, string $tokenName)
     {
-        [$days, $hourly, $sinceTimestamp, $bucketExpr, $dates] = $this->resolveRange($request);
+        [$days, $hourly, $sinceTimestamp, $untilTimestamp, $bucketExpr, $dates, $range] = $this->resolveRange($request);
 
         $token = Token::where('name', $tokenName)->first();
         $balance = $token
@@ -479,6 +569,7 @@ class StatsController extends Controller
         $overviewQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
             ->selectRaw("COALESCE(SUM({$this->totalInputTokensExpr()}), 0) as total_prompt_tokens")
@@ -492,6 +583,7 @@ class StatsController extends Controller
         $dailyTrendQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('date')
             ->selectRaw("{$bucketExpr} as date")
             ->selectRaw('SUM(quota) as daily_quota')
@@ -524,6 +616,7 @@ class StatsController extends Controller
         $dailyModelTrend = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('date', 'model_name')
             ->selectRaw("{$bucketExpr} as date, model_name, SUM(quota) as daily_quota")
             ->orderBy('date')
@@ -552,6 +645,7 @@ class StatsController extends Controller
         $modelDistribution = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('model_name')
             ->selectRaw('model_name')
             ->selectRaw('SUM(quota) as total_quota')
@@ -569,6 +663,7 @@ class StatsController extends Controller
         $groupDistribution = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->whereNotNull('group')
             ->where('group', '!=', '')
             ->groupBy('group')
@@ -591,6 +686,7 @@ class StatsController extends Controller
             'tokenName',
             'days',
             'hourly',
+            'range',
             'overview',
             'dates',
             'dailyData',
@@ -834,11 +930,12 @@ class StatsController extends Controller
             ? '无限'
             : '$' . number_format($token->remain_quota / 500000, 4);
 
-        [$days, $hourly, $sinceTimestamp, $bucketExpr, $dates] = $this->resolveRange($request);
+        [$days, $hourly, $sinceTimestamp, $untilTimestamp, $bucketExpr, $dates, $range] = $this->resolveRange($request);
 
         $overviewQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
             ->selectRaw("COALESCE(SUM({$this->totalInputTokensExpr()}), 0) as total_prompt_tokens")
@@ -851,6 +948,7 @@ class StatsController extends Controller
         $dailyTrendQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('date')
             ->selectRaw("{$bucketExpr} as date")
             ->selectRaw('SUM(quota) as daily_quota')
@@ -882,6 +980,7 @@ class StatsController extends Controller
         $dailyModelTrend = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('date', 'model_name')
             ->selectRaw("{$bucketExpr} as date, model_name, SUM(quota) as daily_quota")
             ->orderBy('date')
@@ -907,6 +1006,7 @@ class StatsController extends Controller
         $modelDistribution = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('model_name')
             ->selectRaw('model_name')
             ->selectRaw('SUM(quota) as total_quota')
@@ -923,6 +1023,7 @@ class StatsController extends Controller
         $groupDistribution = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->whereNotNull('group')
             ->where('group', '!=', '')
             ->groupBy('group')
@@ -946,6 +1047,7 @@ class StatsController extends Controller
             'tokenName',
             'days',
             'hourly',
+            'range',
             'overview',
             'dates',
             'dailyData',
@@ -1004,11 +1106,12 @@ class StatsController extends Controller
             ? '无限'
             : '$' . number_format($token->remain_quota / 500000, 4);
 
-        [$days, $hourly, $sinceTimestamp, $bucketExpr, $dates] = $this->resolveRange($request);
+        [$days, $hourly, $sinceTimestamp, $untilTimestamp, $bucketExpr, $dates, $range] = $this->resolveRange($request);
 
         $overviewQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->selectRaw('COUNT(*) as total_requests')
             ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
             ->selectRaw("COALESCE(SUM({$this->totalInputTokensExpr()}), 0) as total_prompt_tokens")
@@ -1021,6 +1124,7 @@ class StatsController extends Controller
         $dailyTrendQuery = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('date')
             ->selectRaw("{$bucketExpr} as date")
             ->selectRaw('SUM(quota) as daily_quota')
@@ -1052,6 +1156,7 @@ class StatsController extends Controller
         $dailyModelTrend = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('date', 'model_name')
             ->selectRaw("{$bucketExpr} as date, model_name, SUM(quota) as daily_quota")
             ->orderBy('date')
@@ -1077,6 +1182,7 @@ class StatsController extends Controller
         $modelDistribution = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->groupBy('model_name')
             ->selectRaw('model_name')
             ->selectRaw('SUM(quota) as total_quota')
@@ -1093,6 +1199,7 @@ class StatsController extends Controller
         $groupDistribution = DB::table('logs')
             ->where('token_name', $tokenName)
             ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
             ->whereNotNull('group')
             ->where('group', '!=', '')
             ->groupBy('group')
@@ -1115,6 +1222,7 @@ class StatsController extends Controller
             'tokenName',
             'days',
             'hourly',
+            'range',
             'overview',
             'dates',
             'dailyData',

@@ -65,6 +65,7 @@ ddev exec php artisan route:clear
 - `routes/web.php` — Web 路由（后台登录、统计仪表盘、额度预警设置）
 - `resources/views/admin/login.blade.php` — 登录页视图
 - `resources/views/admin/dashboard.blade.php` — 统计仪表盘视图（Tailwind CSS + Chart.js）
+- `resources/views/partials/range-picker.blade.php` — 时间范围 + 基准时间控件（仪表盘与用户详情共用）
 - `app/Http/Controllers/AlertController.php` — 额度预警设置（用户侧 + 管理员侧）
 - `app/Services/AlertChecker.php` — 预警判定与推送
 - `app/Services/FeishuNotifier.php` — 飞书自定义机器人推送与加签
@@ -81,7 +82,15 @@ ddev exec php artisan route:clear
 - 支持 1/3/7/30/90 天时间范围切换，**缺省 1 天**（窗口最小、装载最快）；**1 天（UI 显示「24小时」）走小时粒度** ——
   最近 24 个整点桶，其余按自然日。桶边界、桶键与 SQL 分组表达式统一由
   `StatsController::resolveRange()` 给出，四个统计入口共用
-- 时间范围要跨页保留：仪表盘 → 用户详情、用户详情 → 仪表盘的链接都要带上 `days`
+- 时间范围旁边是**基准时间**（`at` 查询参数，`StatsController::resolveAnchor()`）：把窗口右端从
+  「现在」挪到过去某一刻，用来回看前几天的逐小时明细。基准时间所在的整点/整日**完整计入**
+  （`at=2026-05-01 15:30` + 24 小时 → `04-30 16:00 ~ 05-01 16:00`）；只给日期时按当天 23:00 解释，
+  于是 24 小时窗口正好覆盖那一整天；非法或未来的值一律回落到「最新」。控件在
+  `resources/views/partials/range-picker.blade.php`，仪表盘与用户详情共用
+- `resolveRange()` 返回 `[$days, $hourly, $sinceTimestamp, $untilTimestamp, $bucketExpr, $dates, $range]`，
+  **新增的范围查询必须同时带上下界**（`created_at >= $since` 且 `created_at < $until`）——
+  只写下界在未锚定时看不出问题，一旦设了基准时间就会把基准之后的日志混进统计
+- 时间范围要跨页保留：仪表盘 → 用户详情、用户详情 → 仪表盘的链接都要带上 `days` 和 `at`
 
 ### 缓存统计
 

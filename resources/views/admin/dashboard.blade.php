@@ -21,18 +21,11 @@
 <body class="min-h-screen">
     {{-- 顶部导航 --}}
     <nav class="alz-nav">
-        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2">
             <h1 class="text-xl font-bold text-gray-800">API 用量统计</h1>
             <div class="flex items-center gap-3">
-                {{-- 时间范围切换 --}}
-                <div class="flex rounded-md shadow-sm">
-                    @foreach ([1, 3, 7, 30, 90] as $d)
-                        <a href="?days={{ $d }}"
-                            class="px-3 py-1.5 text-sm border {{ $days == $d ? 'alz-btn-active' : 'bg-white text-gray-700 border-gray-300 alz-btn-day' }} {{ $d == 1 ? 'rounded-l-md' : '' }} {{ $d == 90 ? 'rounded-r-md' : '' }}">
-                            {{ $d == 1 ? '24小时' : $d . '天' }}
-                        </a>
-                    @endforeach
-                </div>
+                {{-- 时间范围切换 + 基准时间 --}}
+                @include('partials.range-picker')
                 {{-- 预警通知 --}}
                 <a href="{{ route('admin.alerts') }}" class="text-sm text-gray-500 hover:text-gray-700 transition">预警通知</a>
                 {{-- 登出 --}}
@@ -96,7 +89,7 @@
                             <tr class="alz-tr">
                                 <td class="px-5 py-3 text-gray-500">{{ $i + 1 }}</td>
                                 <td class="px-5 py-3 font-medium alz-link">
-                                    <a href="{{ route('admin.user.detail', ['tokenName' => $user->token_name, 'days' => $days]) }}">
+                                    <a href="{{ route('admin.user.detail', ['tokenName' => $user->token_name, 'days' => $days, $range['param'] => $range['anchored'] ? $range['value'] : null]) }}">
                                         {{ $user->token_name }}
                                     </a>
                                 </td>
