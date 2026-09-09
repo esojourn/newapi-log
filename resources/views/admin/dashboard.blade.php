@@ -33,6 +33,8 @@
                         </a>
                     @endforeach
                 </div>
+                {{-- 预警通知 --}}
+                <a href="{{ route('admin.alerts') }}" class="text-sm text-gray-500 hover:text-gray-700 transition">预警通知</a>
                 {{-- 登出 --}}
                 <form method="POST" action="{{ route('admin.logout') }}" class="inline">
                     @csrf

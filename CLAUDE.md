@@ -32,6 +32,9 @@ ddev exec ./vendor/bin/phpunit tests/Feature/ExampleTest.php
 # 运行单个测试方法
 ddev exec ./vendor/bin/phpunit --filter=testMethodName
 
+# 额度预警的本地库迁移（必须指定连接和路径，别裸跑 migrate）
+ddev exec php artisan migrate --database=alerts --path=database/migrations/alerts
+
 # 清除缓存
 ddev exec php artisan cache:clear
 ddev exec php artisan config:clear
@@ -59,9 +62,14 @@ ddev exec php artisan route:clear
 - `app/Models/Log.php` — 日志模型（`logs` 表）
 - `app/Models/Token.php` — Token 模型（`tokens` 表）
 - `routes/api.php` — API 路由定义（`/api/log` 已禁用限流）
-- `routes/web.php` — Web 路由（后台登录与统计仪表盘）
+- `routes/web.php` — Web 路由（后台登录、统计仪表盘、额度预警设置）
 - `resources/views/admin/login.blade.php` — 登录页视图
 - `resources/views/admin/dashboard.blade.php` — 统计仪表盘视图（Tailwind CSS + Chart.js）
+- `app/Http/Controllers/AlertController.php` — 额度预警设置（用户侧 + 管理员侧）
+- `app/Services/AlertChecker.php` — 预警判定与推送
+- `app/Services/FeishuNotifier.php` — 飞书自定义机器人推送与加签
+- `app/Console/Commands/CheckBalanceAlerts.php` — `alerts:check` 命令
+- `app/Support/Quota.php` — quota ↔ 美元换算（`PER_DOLLAR = 500000`）
 
 ### 后台统计
 
@@ -103,6 +111,52 @@ Anthropic 语义下**不含**，OpenAI 语义下**包含**。判定逻辑在
 - `userDetail()` / `usage()` / `publicUserDetail()` 是三份几乎相同的副本，新增用户维度统计时
   用 `applyCacheStats()` 这类共用私有方法，避免再复制三遍
 
+### 额度预警通知
+
+Key 余额低于阈值时推送飞书。用户在 `/usage/alerts` 管自己那个 Key 的一套（session 认证），
+管理员在 `/admin/alerts` 勾选监控名单并配另一套阈值，推到管理员自己的飞书。
+两套设置、两套推送去重记录完全独立，同一个 Key 可以两边同时监控。
+
+判定与推送在 `AlertChecker::run()`，由 `alerts:check` 命令（`Console\Kernel` 的 schedule）驱动，
+后台「立即检查」按钮走同一份代码。
+
+生产部署的完整流程见 `docs/deployment.md`。四条不能从代码直接看出来的约束：
+
+1. **迁移必须指定连接和路径**：
+
+   ```bash
+   php artisan migrate --database=alerts --path=database/migrations/alerts
+   ```
+
+   `database/migrations/` 根目录下躺着 Laravel 的 4 个模板迁移（`create_users_table` 等），
+   从未执行过；默认连接指向外部 newapi 生产库。裸跑 `php artisan migrate` 会往那个库里
+   建 `users` / `password_resets` / `failed_jobs` 表。
+
+2. **`config/alerts.php` 的 `webhook_prefixes` 是 SSRF 防线**，不是格式校验。webhook 地址
+   由用户自由提交、由服务端发起请求，白名单在表单校验（`AlertController::webhookRules()`）
+   和真正发请求前（`FeishuNotifier::send()`）各挡一次。放宽它之前先想清楚后果。
+
+3. **用户侧的 `token_id` 只能从 session 反查**（`AlertController::sessionToken()`，逻辑与
+   `StatsController::usage()` 一致），绝不接受表单传入——否则任何登录用户都能改别人 Key 的
+   通知设置。公开路径 `/user/{apikey}` 不提供设置入口，那条路径把 key 暴露在 URL 里。
+
+4. **去重规则**（`AlertChecker::decide()`）：余额 ≥ 阈值就清空推送记录，让下次跌破时能立即
+   提醒；余额 < 阈值且从未推送过则立即推送；否则按 `alerts.remind_hours`（默认 24 小时）复发。
+   保存设置时也会清空推送记录，让新配置立刻生效。`unlimited_quota` 的 Key 一律跳过。
+
+余额口径只用 `tokens.remain_quota`，不读 `users` 表。飞书加签是
+「以 `"{timestamp}\n{secret}"` 为**密钥**、对**空串**取 HMAC-SHA256 再 base64」，
+key 和 data 写反了永远验不过（`AlertsTest::test_sign_matches_feishu_algorithm` 钉住了这个方向）。
+
+测试写在 `tests/Feature/AlertsTest.php`，跑在内存 SQLite 上（`phpunit.xml` 的 `ALERT_DB_DATABASE`）。
+**任何测试都不能用 `RefreshDatabase`** —— 默认连接是外部生产库。tokens 数据靠继承
+`AlertChecker` 覆盖 `loadTokens()` 注入。
+
 ### 数据库
 
-连接外部 MySQL/MariaDB 的 `newapi` 数据库，直接读取已有的 `logs` 和 `tokens` 表。本项目的 `database/migrations/` 中的迁移文件是 Laravel 默认模板，与核心业务无关。
+连接外部 MySQL/MariaDB 的 `newapi` 数据库，直接读取已有的 `logs` 和 `tokens` 表（**只读**）。
+`database/migrations/` 根目录下的迁移文件是 Laravel 默认模板，从未执行过，与核心业务无关——
+**不要裸跑 `php artisan migrate`**，那会往外部库里建表。
+
+本项目自己的数据（额度预警的设置与订阅）走独立的 `alerts` 连接，是一个 SQLite 文件
+（`database/alerts.sqlite`，`ALERT_DB_DATABASE` 可覆盖），迁移在 `database/migrations/alerts/`。

@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use App\Models\Log;
 use App\Models\Token;
+use App\Support\Quota;
 
 class StatsController extends Controller
 {
@@ -21,11 +22,12 @@ class StatsController extends Controller
     private const RANGE_DAYS = [1, 3, 7, 30, 90];
 
     /**
-     * 将 quota 转换为金额（quota / 500000）
+     * 将 quota 转换为金额。换算比例收口在 App\Support\Quota，
+     * 预警阈值那边需要反向换算，两处必须用同一个常量。
      */
     private function quotaToAmount(int $quota): float
     {
-        return round($quota / 500000, 4);
+        return Quota::toAmount($quota);
     }
 
     /**

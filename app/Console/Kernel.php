@@ -15,7 +15,11 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
-        // $schedule->command('inspire')->hourly();
+        // 余额预警。频率由 config('alerts.schedule_cron') 决定（ALERT_CHECK_CRON）。
+        // 需要服务器上有一条 * * * * * php artisan schedule:run 才会真正跑起来。
+        $schedule->command('alerts:check')
+            ->cron(config('alerts.schedule_cron'))
+            ->withoutOverlapping();
     }
 
     /**

@@ -67,6 +67,15 @@ return [
             ]) : [],
         ],
 
+        // 额度预警通知的本地存储。外部 newapi 库保持只读，本项目自己的
+        // 设置/订阅数据一律走这个 SQLite 文件，迁移见 database/migrations/alerts。
+        'alerts' => [
+            'driver' => 'sqlite',
+            'database' => env('ALERT_DB_DATABASE', database_path('alerts.sqlite')),
+            'prefix' => '',
+            'foreign_key_constraints' => true,
+        ],
+
         'pgsql' => [
             'driver' => 'pgsql',
             'url' => env('DATABASE_URL'),

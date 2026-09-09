@@ -16,3 +16,4 @@ yarn-error.log
 /.ddev
 /.spec-workflow
 composer.phar
+/database/alerts.sqlite*

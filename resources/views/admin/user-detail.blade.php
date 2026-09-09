@@ -48,6 +48,8 @@
                     @endforeach
                 </div>
                 @if(isset($isSession) && $isSession)
+                {{-- 通知设置 --}}
+                <a href="{{ route('user.alerts') }}" class="text-sm text-gray-500 hover:text-gray-700 transition">通知设置</a>
                 {{-- 切换 Key --}}
                 <form method="POST" action="{{ route('user.signout') }}" class="inline">
                     @csrf
