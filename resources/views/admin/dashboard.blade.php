@@ -121,33 +121,12 @@
             </div>
         </div>
 
-        {{-- 折线图：每日用量趋势 --}}
+        {{-- 混合图：Top 10 用户 Token 折线 + 全站总金额柱图 --}}
         <div class="bg-white rounded-lg shadow p-5">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4">{{ $hourly ? '每小时' : '每日' }}用量趋势（Top 10 用户）</h2>
+            <h2 class="text-lg font-semibold text-gray-800 mb-1">{{ $hourly ? '每小时' : '每日' }}用量趋势（Top 10 用户）</h2>
+            <p class="text-xs text-gray-400 mb-4">折线显示 Top 10 用户的 Token 用量，柱图显示全部用户的总金额。</p>
             <div class="relative" style="height: 300px;">
                 <canvas id="lineChart"></canvas>
-            </div>
-
-            {{-- 每日金额表格 --}}
-            <div class="mt-6 overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead class="alz-thead">
-                        <tr>
-                            <th class="text-left px-4 py-2 font-medium">{{ $hourly ? '时段' : '日期' }}</th>
-                            <th class="text-right px-4 py-2 font-medium">{{ $hourly ? '每小时' : '每日' }}总金额</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y alz-divider">
-                        @foreach ($dates as $date)
-                            <tr class="alz-tr">
-                                <td class="px-4 py-2 text-gray-700">{{ $date }}</td>
-                                <td class="px-4 py-2 text-right text-gray-700">
-                                    ${{ number_format(round(($dailyAmounts[$date]->daily_quota ?? 0) / 500000, 4), 4) }}
-                                </td>
-                            </tr>
-                        @endforeach
-                    </tbody>
-                </table>
             </div>
         </div>
 
@@ -156,6 +135,7 @@
             <h2 class="text-lg font-semibold text-gray-800 mb-1">缓存利用率趋势</h2>
             <p class="text-xs text-gray-400 mb-4">
                 输入 Tokens 按缓存状态拆分（三段之和 = {{ $hourly ? '该时段' : '当日' }}总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
+                请求数折线随模型筛选切换，全部模型显示汇总请求数。
                 <span id="cacheScopeLabel">全部模型</span> 区间内预估节省
                 <span id="cacheSavedAmount" class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
             </p>
@@ -292,34 +272,75 @@
             }
         });
 
-        // 折线图
+        // 混合图：保留 Top 10 用户 Token 折线，原金额表格改为全站总金额柱图
+        const dates = @json($dates);
         const dailyData = @json($dailyData);
+        const dailyTotalAmountData = @json($dailyTotalAmountData);
         const userNames = @json($topUserNames);
         new Chart(document.getElementById('lineChart'), {
-            type: 'line',
+            type: 'bar',
             data: {
-                labels: @json($dates),
-                datasets: userNames.map((name, i) => ({
-                    label: name,
-                    data: Object.values(dailyData[name] || {}),
-                    borderColor: COLORS[i % COLORS.length],
-                    backgroundColor: 'transparent',
-                    tension: 0.3,
-                    borderWidth: 2,
-                    pointRadius: 1,
-                }))
+                labels: dates,
+                datasets: [
+                    ...userNames.map((name, i) => ({
+                        type: 'line',
+                        label: name,
+                        data: dates.map(date => dailyData[name]?.[date] ?? 0),
+                        borderColor: COLORS[i % COLORS.length],
+                        backgroundColor: 'transparent',
+                        tension: 0.3,
+                        borderWidth: 2,
+                        pointRadius: 1,
+                        yAxisID: 'y',
+                        order: 1,
+                    })),
+                    {
+                        type: 'bar',
+                        label: '总金额（全部用户，$）',
+                        data: dates.map(date => dailyTotalAmountData[date] ?? 0),
+                        backgroundColor: 'rgba(100, 116, 139, 0.25)',
+                        borderColor: '#94A3B8',
+                        borderWidth: 1,
+                        yAxisID: 'y1',
+                        order: 2,
+                    }
+                ]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { position: 'top' } },
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => ctx.dataset.yAxisID === 'y1'
+                                ? `${ctx.dataset.label}: $${ctx.parsed.y.toFixed(4)}`
+                                : `${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString()} Tokens`
+                        }
+                    }
+                },
                 scales: {
-                    y: { ticks: { callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v } }
+                    y: {
+                        type: 'linear',
+                        position: 'left',
+                        beginAtZero: true,
+                        title: { display: true, text: 'Tokens' },
+                        ticks: { callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v }
+                    },
+                    y1: {
+                        type: 'linear',
+                        position: 'right',
+                        beginAtZero: true,
+                        title: { display: true, text: '金额 ($)' },
+                        grid: { drawOnChartArea: false },
+                        ticks: { callback: v => '$' + v.toFixed(2) }
+                    }
                 }
             }
         });
 
-        // 缓存利用率趋势：输入 Tokens 按缓存状态堆叠 + 命中率折线
+        // 缓存利用率趋势：输入 Tokens 按缓存状态堆叠 + 命中率和请求数折线
         const cacheData = @json($dailyCacheData);
         const fmtTokens = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v;
 
@@ -327,7 +348,7 @@
         const modelCacheSaved = @json($modelCacheSaved);
         const allCacheSaved = {{ $overview->cache_saved_amount }};
 
-        // 从一份缓存序列里拆出三段柱子与命中率折线
+        // 从同一模型范围的序列里拆出三段柱子、命中率与请求数折线
         // 命中率 = 缓存读取 / 当日总输入；当日无输入时留空（折线断开）
         function cacheSeries(source) {
             const read = Object.values(source.cache_tokens);
@@ -337,7 +358,8 @@
                 const total = r + write[i] + miss[i];
                 return total > 0 ? +(r / total * 100).toFixed(1) : null;
             });
-            return { read, write, miss, rate };
+            const requests = dates.map(date => source.request_count[date] ?? 0);
+            return { read, write, miss, rate, requests };
         }
 
         const initialCache = cacheSeries(cacheData);
@@ -366,6 +388,19 @@
                         order: 1,
                         pointRadius: 2,
                         spanGaps: true,
+                    },
+                    {
+                        label: '请求数',
+                        data: initialCache.requests,
+                        type: 'line',
+                        borderColor: '#E11D48',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        borderDash: [5, 3],
+                        tension: 0.3,
+                        yAxisID: 'y2',
+                        order: 0,
+                        pointRadius: 2,
                     }
                 ]
             },
@@ -379,6 +414,8 @@
                         callbacks: {
                             label: ctx => ctx.dataset.yAxisID === 'y1'
                                 ? `${ctx.dataset.label}: ${ctx.raw === null ? '-' : ctx.raw + '%'}`
+                                : ctx.dataset.yAxisID === 'y2'
+                                ? `${ctx.dataset.label}: ${ctx.raw.toLocaleString()} 次`
                                 : `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}`
                         }
                     }
@@ -400,6 +437,14 @@
                         title: { display: true, text: '命中率 (%)' },
                         grid: { drawOnChartArea: false },
                         ticks: { callback: v => v + '%' }
+                    },
+                    y2: {
+                        type: 'linear',
+                        position: 'right',
+                        beginAtZero: true,
+                        title: { display: true, text: '请求数', color: '#E11D48' },
+                        grid: { drawOnChartArea: false },
+                        ticks: { precision: 0, color: '#E11D48', callback: v => v.toLocaleString() }
                     }
                 }
             }
@@ -421,6 +466,7 @@
             cacheChart.data.datasets[1].data = series.write;
             cacheChart.data.datasets[2].data = series.miss;
             cacheChart.data.datasets[3].data = series.rate;
+            cacheChart.data.datasets[4].data = series.requests;
             cacheChart.update();
 
             cacheScopeLabel.textContent = model || '全部模型';

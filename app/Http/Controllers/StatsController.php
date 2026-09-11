@@ -458,6 +458,7 @@ class StatsController extends Controller
             ->whereIn('model_name', $cacheModelNames)
             ->groupBy('date', 'model_name')
             ->selectRaw("{$bucketExpr} as date, model_name")
+            ->selectRaw('COUNT(*) as request_count')
             ->selectRaw("COALESCE(SUM({$this->cacheSavedQuotaExpr()}), 0) as daily_cache_saved_quota")
             ->orderBy('date');
 
@@ -473,12 +474,13 @@ class StatsController extends Controller
             ->orderBy('date')
             ->get();
 
-        // 每日总金额（缓存字段合并进同一次扫描）
+        // 每日总金额、请求数与缓存字段合并进同一次扫描（包含全部模型和用户）
         $dailyAmountsQuery = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
             ->where('created_at', '<', $untilTimestamp)
             ->groupBy('date')
             ->selectRaw("{$bucketExpr} as date, SUM(quota) as daily_quota")
+            ->selectRaw('COUNT(*) as request_count')
             ->orderBy('date');
 
         $dailyAmounts = $this->selectDailyCache($dailyAmountsQuery)
@@ -499,16 +501,20 @@ class StatsController extends Controller
             }
         }
 
-        // 全站每日缓存趋势
+        // 全站每日金额、缓存与请求数趋势，无日志的时段补零
+        $dailyTotalAmountData = array_fill_keys($dates, 0);
         $dailyCacheData = $this->emptyCacheSeries($dates);
+        $dailyCacheData['request_count'] = array_fill_keys($dates, 0);
         foreach ($dates as $date) {
             $row = $dailyAmounts->get($date);
             if (!$row) {
                 continue;
             }
+            $dailyTotalAmountData[$date] = $this->quotaToAmount((int) $row->daily_quota);
             $dailyCacheData['cache_tokens'][$date] = (int) $row->daily_cache_tokens;
             $dailyCacheData['cache_creation_tokens'][$date] = (int) $row->daily_cache_creation_tokens;
             $dailyCacheData['uncached_prompt_tokens'][$date] = (int) $row->daily_uncached_prompt_tokens;
+            $dailyCacheData['request_count'][$date] = (int) $row->request_count;
         }
 
         // 逐模型的每日缓存趋势（供缓存图表的模型筛选按钮切换）
@@ -516,6 +522,7 @@ class StatsController extends Controller
         $modelCacheSavedQuota = [];
         foreach ($cacheModelNames as $model) {
             $modelCacheData[$model] = $this->emptyCacheSeries($dates);
+            $modelCacheData[$model]['request_count'] = array_fill_keys($dates, 0);
             $modelCacheSavedQuota[$model] = 0.0;
         }
         foreach ($modelCacheTrend as $row) {
@@ -525,6 +532,7 @@ class StatsController extends Controller
             $modelCacheData[$row->model_name]['cache_tokens'][$row->date] = (int) $row->daily_cache_tokens;
             $modelCacheData[$row->model_name]['cache_creation_tokens'][$row->date] = (int) $row->daily_cache_creation_tokens;
             $modelCacheData[$row->model_name]['uncached_prompt_tokens'][$row->date] = (int) $row->daily_uncached_prompt_tokens;
+            $modelCacheData[$row->model_name]['request_count'][$row->date] = (int) $row->request_count;
             $modelCacheSavedQuota[$row->model_name] += (float) $row->daily_cache_saved_quota;
         }
 
@@ -544,6 +552,7 @@ class StatsController extends Controller
             'dates',
             'dailyData',
             'dailyAmountData',
+            'dailyTotalAmountData',
             'topUserNames',
             'dailyAmounts',
             'dailyCacheData',
