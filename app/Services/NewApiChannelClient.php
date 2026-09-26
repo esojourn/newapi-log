@@ -13,22 +13,40 @@ class NewApiChannelClient
     public const STATUS_ENABLED = 1;
     public const STATUS_AUTO_DISABLED = 3;
 
+    private ?array $configuration = null;
+
+    public function configure(array $configuration): void
+    {
+        $this->configuration = $configuration;
+    }
+
+    private function option(string $key)
+    {
+        return ($this->configuration ?? config('channels'))[$key] ?? null;
+    }
+
+    public static function isValidBaseUrl(string $value): bool
+    {
+        $url = parse_url($value);
+
+        return $url !== false && !empty($url['host'])
+            && in_array($url['scheme'] ?? '', ['http', 'https'], true)
+            && !isset($url['user']) && !isset($url['pass']) && !isset($url['query']) && !isset($url['fragment']);
+    }
+
     public function validateConfiguration(): void
     {
-        $url = parse_url((string) config('channels.base_url'));
-        if ($url === false || empty($url['host'])
-            || !in_array($url['scheme'] ?? '', ['http', 'https'], true)
-            || isset($url['user']) || isset($url['pass']) || isset($url['query']) || isset($url['fragment'])) {
+        if (!self::isValidBaseUrl((string) $this->option('base_url'))) {
             throw new RuntimeException('请配置 NEW_API_BASE_URL 为 NewAPI 实例地址（不含 /api/channel 或 /v1）。');
         }
 
-        if (trim((string) config('channels.access_token')) === ''
-            || !ctype_digit((string) config('channels.user_id'))
-            || (int) config('channels.user_id') < 1) {
+        if (trim((string) $this->option('access_token')) === ''
+            || !ctype_digit((string) $this->option('user_id'))
+            || (int) $this->option('user_id') < 1) {
             throw new RuntimeException('请配置 NEW_API_ACCESS_TOKEN（管理员访问令牌）和 NEW_API_USER_ID。');
         }
 
-        if ((int) config('channels.http_timeout') < 1) {
+        if ((int) $this->option('http_timeout') < 1) {
             throw new RuntimeException('CHANNEL_RECOVERY_HTTP_TIMEOUT 必须大于 0。');
         }
     }
@@ -105,14 +123,14 @@ class NewApiChannelClient
 
         try {
             return Http::acceptJson()
-                ->withToken(trim((string) config('channels.access_token')))
-                ->withHeaders(['New-Api-User' => (string) config('channels.user_id')])
-                ->timeout((int) config('channels.http_timeout'))
-                ->withOptions(['connect_timeout' => min(10, (int) config('channels.http_timeout'))])
+                ->withToken(trim((string) $this->option('access_token')))
+                ->withHeaders(['New-Api-User' => (string) $this->option('user_id')])
+                ->timeout((int) $this->option('http_timeout'))
+                ->withOptions(['connect_timeout' => min(10, (int) $this->option('http_timeout'))])
                 ->withoutRedirecting()
                 ->send(
                     $method,
-                    rtrim(config('channels.base_url'), '/') . $path,
+                    rtrim($this->option('base_url'), '/') . $path,
                     $method === 'GET' ? [] : ['json' => $body]
                 );
         } catch (ConnectionException $e) {

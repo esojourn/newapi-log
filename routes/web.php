@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Http\Request;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AlertController;
+use App\Http\Controllers\ChannelRecoveryController;
 use App\Http\Controllers\StatsController;
 
 /*
@@ -44,6 +45,9 @@ Route::post('/admin/logout', [AdminController::class, 'logout'])->name('admin.lo
 
 Route::middleware('admin')->group(function () {
     Route::get('/admin', [StatsController::class, 'dashboard'])->name('admin.dashboard');
+    Route::get('/admin/channel-recovery', [ChannelRecoveryController::class, 'index'])->name('admin.channel-recovery');
+    Route::post('/admin/channel-recovery', [ChannelRecoveryController::class, 'save'])
+        ->middleware('throttle:20,1')->name('admin.channel-recovery.save');
     Route::get('/admin/user/{tokenName}', [StatsController::class, 'userDetail'])->name('admin.user.detail');
     Route::get('/admin/user/{tokenName}/logs', [StatsController::class, 'userLogs'])->name('admin.user.logs');
     Route::get('/admin/user/{tokenName}/logs/export', [StatsController::class, 'userLogsExport'])->name('admin.user.logs.export');

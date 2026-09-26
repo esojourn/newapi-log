@@ -13,11 +13,11 @@
    见[第 4 步](#4-额度预警的本地库)。
 
 2. **本项目自己的数据只有一个 SQLite 文件**（`database/alerts.sqlite`，额度预警的设置与
-   订阅）。它需要 PHP 进程可写，且是唯一需要备份的东西。
+   订阅、渠道恢复设置和动作日志）。它需要 PHP 进程可写。
 
-3. **`APP_KEY` 是加密根。** 飞书 Webhook 地址与签名密钥以密文落盘（APP_KEY 派生）。
+3. **`APP_KEY` 是加密根。** 飞书 Webhook、签名密钥和 NewAPI 管理员访问令牌以密文落盘（APP_KEY 派生）。
    换掉 APP_KEY 等于把所有已保存的 Webhook 作废 —— 服务不会崩，但那些订阅会被跳过，
-   并在设置页显示「Webhook 地址无法读取，请重新填写」。备份 SQLite 文件时**务必连
+   并在设置页显示「Webhook 地址无法读取，请重新填写」；渠道恢复令牌也会失效。备份 SQLite 文件时**务必连
    APP_KEY 一起备份**，否则恢复出来的是一堆解不开的密文。
 
 ## 环境要求
@@ -133,11 +133,13 @@ php artisan schedule:list
 
 #### 可选：渠道自动恢复
 
-如需自动恢复 NewAPI 后台中“自动封禁开启且已自动禁用”的渠道，按
-[渠道自动恢复部署说明](channel-recovery.md) 配置 `CHANNEL_RECOVERY_ENABLED`、
-`NEW_API_BASE_URL`、`NEW_API_ACCESS_TOKEN`、`NEW_API_USER_ID`。
-默认每 5 分钟检查，间隔由 `CHANNEL_RECOVERY_CRON` 控制，与预警共用上面的系统 cron。
-外部数据库继续只读，无需迁移；渠道测试及启用通过 NewAPI 管理 API 完成。
+如需自动恢复 NewAPI 后台中“自动封禁开启且已自动禁用”的渠道，先执行第 4 步的 alerts 专用迁移，
+再以管理员身份打开 `/admin/channel-recovery` 设置开关、检查计划和 NewAPI 连接信息。
+该页同时提供恢复日志查看、筛选与分页。默认每 5 分钟检查，与预警共用上面的系统 cron。
+`schedule:list` 会显示每分钟调度 `channels:recover --scheduled`，命令再按保存的检查计划决定是否执行。
+首次保存前沿用原 `.env` 值；保存后以页面设置为准，立即对下一轮生效，无需清理配置缓存。
+外部数据库继续只读；新增表仅在本地 SQLite，渠道测试及启用通过 NewAPI 管理 API 完成。
+详细参数和兼容规则见 [渠道自动恢复部署说明](channel-recovery.md)。
 
 ### 6. 缓存优化（可选）
 
@@ -198,8 +200,8 @@ php artisan config:clear && php artisan cache:clear && php artisan route:clear &
 
 | 对象 | 说明 |
 |---|---|
-| `database/alerts.sqlite` | 预警设置、监控名单、推送去重记录 |
-| `.env` 里的 `APP_KEY` | 解密 Webhook 地址与签名密钥的钥匙，丢了备份等于废掉 |
+| `database/alerts.sqlite` | 预警设置、监控名单、推送去重记录、渠道恢复设置与动作日志 |
+| `.env` 里的 `APP_KEY` | 解密 Webhook、签名密钥与 NewAPI 访问令牌的钥匙，丢了备份等于废掉 |
 
 ```bash
 # 备份（SQLite 在线备份，避免拷到写了一半的文件）

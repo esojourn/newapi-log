@@ -40,10 +40,13 @@
                 </a>
                 <h1 class="text-xl font-bold text-gray-800">预警通知</h1>
             </div>
-            <form method="POST" action="{{ route('admin.logout') }}" class="inline">
-                @csrf
-                <button type="submit" class="text-sm text-gray-500 hover:text-red-600 transition">登出</button>
-            </form>
+            <div class="flex items-center gap-4">
+                <a href="{{ route('admin.channel-recovery') }}" class="alz-link text-sm">渠道恢复</a>
+                <form method="POST" action="{{ route('admin.logout') }}" class="inline">
+                    @csrf
+                    <button type="submit" class="text-sm text-gray-500 hover:text-red-600 transition">登出</button>
+                </form>
+            </div>
         </div>
     </nav>
 

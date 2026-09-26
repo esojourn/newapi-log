@@ -2,10 +2,14 @@
 
 namespace Tests\Feature;
 
+use App\Models\ChannelRecoveryLog;
+use App\Models\ChannelRecoverySetting;
 use App\Services\ChannelRecoveryChecker;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -26,6 +30,7 @@ class ChannelRecoveryTest extends TestCase
 
         // 只在专用内存连接造数据，绝不迁移或写入外部 NewAPI 库。
         config([
+            'app.key' => 'base64:' . base64_encode(str_repeat('a', 32)),
             'database.connections.channel_recovery_test' => [
                 'driver' => 'sqlite',
                 'database' => ':memory:',
@@ -37,6 +42,11 @@ class ChannelRecoveryTest extends TestCase
             'channels.access_token' => 'private-admin-token',
             'channels.user_id' => '42',
             'channels.http_timeout' => 30,
+        ]);
+        Artisan::call('migrate', [
+            '--database' => 'alerts',
+            '--path' => 'database/migrations/alerts',
+            '--force' => true,
         ]);
         DB::setDefaultConnection('channel_recovery_test');
         Schema::connection('channel_recovery_test')->create('channels', function (Blueprint $table) {
@@ -76,6 +86,7 @@ class ChannelRecoveryTest extends TestCase
 
     protected function tearDown(): void
     {
+        Carbon::setTestNow();
         DB::purge('channel_recovery_test');
 
         parent::tearDown();
@@ -108,6 +119,14 @@ class ChannelRecoveryTest extends TestCase
             $this->assertStringNotContainsString('*', $query['query']);
         }
         $this->assertSame(3, DB::table('channels')->where('id', 1)->value('status'));
+        $action = ChannelRecoveryLog::sole();
+        $this->assertSame(1, $action->channel_id);
+        $this->assertSame('测试渠道 1', $action->channel_name);
+        $this->assertSame('manual', $action->source);
+        $this->assertSame('recovered', $action->result);
+        $this->assertSame(3, $action->from_status);
+        $this->assertSame(1, $action->target_status);
+        $this->assertNotNull($action->completed_at);
     }
 
     public function test_disabled_feature_does_not_query_database_or_send_requests(): void
@@ -116,7 +135,7 @@ class ChannelRecoveryTest extends TestCase
         DB::enableQueryLog();
 
         $this->assertSame(0, app(ChannelRecoveryChecker::class)->run()['checked']);
-        $this->artisan('channels:recover')->expectsOutput('渠道自动恢复未开启，请配置 CHANNEL_RECOVERY_ENABLED=true。')->assertExitCode(0);
+        $this->artisan('channels:recover')->expectsOutput('渠道自动恢复未开启，请在管理员渠道恢复设置中开启。')->assertExitCode(0);
 
         $this->assertSame([], DB::getQueryLog());
         Http::assertNothingSent();
@@ -163,6 +182,7 @@ class ChannelRecoveryTest extends TestCase
         $this->assertSame(0, $stats['recovered']);
         $this->assertSame(1, $stats['skipped']);
         Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+        $this->assertSame('skipped', ChannelRecoveryLog::sole()->result);
     }
 
     public function failedProbeResponses(): array
@@ -191,6 +211,7 @@ class ChannelRecoveryTest extends TestCase
         $this->assertSame(0, $stats['recovered']);
         Http::assertSentCount(2);
         Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+        $this->assertSame(0, ChannelRecoveryLog::count());
     }
 
     public function test_timeout_is_redacted_and_does_not_stop_other_channels(): void
@@ -226,6 +247,7 @@ class ChannelRecoveryTest extends TestCase
         $this->assertSame(0, $stats['recovered']);
         Http::assertSentCount(2);
         Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+        $this->assertSame(0, ChannelRecoveryLog::count());
     }
 
     public function test_legacy_api_fallback_sends_only_id_and_status(): void
@@ -251,6 +273,7 @@ class ChannelRecoveryTest extends TestCase
         $this->assertSame(0, $stats['recovered']);
         Http::assertNotSent(fn ($request) => $request->method() === 'PUT');
         Http::assertSentCount(4);
+        $this->assertSame('failed', ChannelRecoveryLog::sole()->result);
     }
 
     public function test_update_success_must_be_confirmed_by_enabled_status(): void
@@ -346,31 +369,111 @@ class ChannelRecoveryTest extends TestCase
         $this->artisan('channels:recover', ['--channel-id' => '1'])->assertExitCode(1);
     }
 
-    public function test_schedule_uses_configured_interval_with_overlap_protection(): void
+    public function test_schedule_polls_settings_every_minute_with_overlap_protection(): void
     {
         $events = collect(app(Schedule::class)->events())
             ->filter(fn ($event) => str_contains($event->command, 'channels:recover'));
 
         $this->assertCount(1, $events);
-        $this->assertSame('*/7 * * * *', $events->first()->expression);
+        $this->assertSame('* * * * *', $events->first()->expression);
+        $this->assertStringContainsString('--scheduled', $events->first()->command);
         $this->assertTrue($events->first()->withoutOverlapping);
     }
 
-    public function test_schedule_is_not_registered_when_disabled(): void
+    public function test_schedule_remains_registered_when_env_is_disabled_so_page_can_enable_it(): void
     {
         config(['channels.recovery_enabled' => false]);
 
         $events = collect(app(Schedule::class)->events())
             ->filter(fn ($event) => str_contains($event->command, 'channels:recover'));
 
-        $this->assertCount(0, $events);
+        $this->assertCount(1, $events);
+    }
+
+    public function test_saved_settings_and_schedule_are_reloaded_between_runs(): void
+    {
+        $this->seedChannel(1);
+        $settings = ChannelRecoverySetting::current();
+        $settings->schedule_cron = '*/10 * * * *';
+        $settings->access_token = 'saved-admin-token';
+        $settings->user_id = 99;
+        $settings->save();
+        config(['channels.recovery_enabled' => false]);
+        Carbon::setTestNow(Carbon::parse('2026-09-26 12:07:00', config('app.timezone')));
+        $checker = app(ChannelRecoveryChecker::class);
+
+        $this->assertSame(0, $checker->run(false, null, true)['checked']);
+        Http::assertNothingSent();
+
+        $settings->update(['schedule_cron' => '*/7 * * * *']);
+        $this->assertSame(1, $checker->run(false, null, true)['recovered']);
+        $this->assertSame('scheduled', ChannelRecoveryLog::sole()->source);
+        Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer saved-admin-token')
+            && $request->hasHeader('New-Api-User', '99'));
+    }
+
+    public function test_saved_disabled_setting_overrides_enabled_environment(): void
+    {
+        $this->seedChannel(1);
+        $settings = ChannelRecoverySetting::current();
+        $settings->enabled = false;
+        $settings->save();
+
+        $this->assertSame(0, app(ChannelRecoveryChecker::class)->run()['checked']);
+        $this->artisan('channels:recover')->assertExitCode(0);
+        Http::assertNothingSent();
+    }
+
+    public function test_recovery_intent_is_persisted_before_status_update(): void
+    {
+        $this->seedChannel(1);
+        $this->onEnable = function ($id) {
+            $action = ChannelRecoveryLog::sole();
+            $this->assertSame($id, $action->channel_id);
+            $this->assertSame('pending', $action->result);
+            $this->assertNull($action->completed_at);
+            $this->apiChannels[$id]['status'] = 1;
+
+            return Http::response(['success' => true]);
+        };
+
+        $this->assertSame(1, app(ChannelRecoveryChecker::class)->run()['recovered']);
+        $this->assertSame('recovered', ChannelRecoveryLog::sole()->result);
+        $this->assertSame(0, app(ChannelRecoveryChecker::class)->run()['recovered']);
+        $this->assertSame(1, ChannelRecoveryLog::count());
+    }
+
+    public function test_no_status_update_when_local_audit_storage_is_unavailable(): void
+    {
+        $this->seedChannel(1);
+        Schema::connection('alerts')->drop('channel_recovery_logs');
+
+        $stats = app(ChannelRecoveryChecker::class)->run();
+
+        $this->assertSame(1, $stats['healthy']);
+        $this->assertSame(0, $stats['recovered']);
+        $this->assertSame(1, $stats['failed']);
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+    }
+
+    public function test_completion_write_failure_leaves_pending_record_for_followup(): void
+    {
+        $this->seedChannel(1);
+        DB::connection('alerts')->statement("CREATE TRIGGER deny_log_completion BEFORE UPDATE ON channel_recovery_logs BEGIN SELECT RAISE(FAIL, 'test audit failure'); END");
+
+        $stats = app(ChannelRecoveryChecker::class)->run();
+
+        $this->assertSame(1, $stats['recovered']);
+        $this->assertSame(1, $stats['failed']);
+        $this->assertSame('pending', ChannelRecoveryLog::sole()->result);
+        $this->assertNull(ChannelRecoveryLog::sole()->completed_at);
     }
 
     private function seedChannel(int $id, int $status = 3, ?int $autoBan = 1): void
     {
         $channel = ['id' => $id, 'status' => $status, 'auto_ban' => $autoBan];
         DB::connection('channel_recovery_test')->table('channels')->insert($channel);
-        $this->apiChannels[$id] = $channel;
+        $this->apiChannels[$id] = array_merge($channel, ['name' => '测试渠道 ' . $id]);
     }
 
     private function enable(int $id)

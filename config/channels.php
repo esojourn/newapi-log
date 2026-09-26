@@ -1,7 +1,8 @@
 <?php
 
 return [
-    // 配置好 NewAPI 管理接口后再开启；外部数据库连接仍然只需 SELECT 权限。
+    // 管理员页面首次保存前的默认值；保存后使用本地 channel_recovery_settings。
+    // 外部数据库连接仍然只需 SELECT 权限。
     'recovery_enabled' => (bool) env('CHANNEL_RECOVERY_ENABLED', false),
     'schedule_cron' => env('CHANNEL_RECOVERY_CRON', '*/5 * * * *'),
 

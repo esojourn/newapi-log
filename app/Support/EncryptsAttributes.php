@@ -33,7 +33,7 @@ trait EncryptsAttributes
         try {
             return Crypt::decryptString($value);
         } catch (DecryptException $e) {
-            Log::warning('预警设置解密失败，可能是 APP_KEY 变更过，需要重新填写', [
+            Log::warning('加密设置解密失败，可能是 APP_KEY 变更过，需要重新填写', [
                 'model' => static::class,
                 'id' => $this->getKey(),
             ]);

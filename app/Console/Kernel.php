@@ -21,11 +21,11 @@ class Kernel extends ConsoleKernel
             ->cron(config('alerts.schedule_cron'))
             ->withoutOverlapping();
 
-        if (config('channels.recovery_enabled')) {
-            $schedule->command('channels:recover')
-                ->cron(config('channels.schedule_cron'))
-                ->withoutOverlapping();
-        }
+        // 每分钟读取管理员设置，再由命令判断是否到期；网页保存后无需重建配置缓存。
+        // 注册调度时不访问数据库，保证首次安装的 migrate/config:cache 能正常运行。
+        $schedule->command('channels:recover --scheduled')
+            ->everyMinute()
+            ->withoutOverlapping();
     }
 
     /**
