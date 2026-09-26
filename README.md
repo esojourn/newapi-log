@@ -99,6 +99,15 @@ php artisan alerts:check --token-id=7  # 只检查某个 Key，排障用
 出于 SSRF 防护，只接受 `open.feishu.cn` / `open.larksuite.com` 的机器人地址
 （白名单见 `config/alerts.php`）。
 
+### 渠道自动恢复
+
+定时检查 NewAPI 后台渠道列表中**自动封禁已开启（`auto_ban=1`）且已自动禁用（`status=3`）**的渠道，
+渠道测试成功后通过 NewAPI 管理接口恢复为启用。已启用、手动禁用和关闭自动封禁的渠道均不检查。
+外部数据库保持只读，无需迁移；测试及状态更新由 NewAPI 自身处理。
+
+功能默认关闭，开启后默认每 5 分钟检查一次。需配置 NewAPI 实例地址、管理员访问令牌和用户 ID，
+部署步骤、间隔配置与手动检查命令见 [渠道自动恢复](docs/channel-recovery.md)。
+
 ## 技术栈
 
 - PHP 8.1 + Laravel 8

@@ -131,6 +131,14 @@ ALERT_HTTP_TIMEOUT=10          # 调用飞书接口的超时秒数
 php artisan schedule:list
 ```
 
+#### 可选：渠道自动恢复
+
+如需自动恢复 NewAPI 后台中“自动封禁开启且已自动禁用”的渠道，按
+[渠道自动恢复部署说明](channel-recovery.md) 配置 `CHANNEL_RECOVERY_ENABLED`、
+`NEW_API_BASE_URL`、`NEW_API_ACCESS_TOKEN`、`NEW_API_USER_ID`。
+默认每 5 分钟检查，间隔由 `CHANNEL_RECOVERY_CRON` 控制，与预警共用上面的系统 cron。
+外部数据库继续只读，无需迁移；渠道测试及启用通过 NewAPI 管理 API 完成。
+
 ### 6. 缓存优化（可选）
 
 项目里 `env()` 只在 `config/` 下使用，所以 `config:cache` 是安全的：
@@ -181,7 +189,8 @@ php artisan config:clear && php artisan cache:clear && php artisan route:clear &
 # 如果用了第 6 步的缓存优化，这里再 config:cache / route:cache / view:cache 一遍
 ```
 
-服务是无状态的只读查询 + 一个 SQLite 文件，不需要停机窗口，也没有队列 worker 要重启。
+服务使用外部只读查询 + 一个 SQLite 文件，不需要停机窗口，也没有队列 worker 要重启。
+如果启用了渠道自动恢复，还会通过 NewAPI 管理 API 测试和启用符合条件的渠道。
 
 ## 备份与回滚
 
@@ -197,8 +206,9 @@ php artisan config:clear && php artisan cache:clear && php artisan route:clear &
 sqlite3 database/alerts.sqlite ".backup '/backup/alerts-$(date +%F).sqlite'"
 ```
 
-外部 NewAPI 库本项目只读，回滚代码不涉及任何数据修复；直接 `git checkout` 上一个版本
-再走一遍「日常更新」即可。
+外部 NewAPI 库本项目只读，回滚代码不涉及本项目的外部库迁移；直接 `git checkout` 上一个版本
+再走一遍「日常更新」即可。通过渠道自动恢复 API 已启用的渠道不会随代码回滚撤销，
+需要时在 NewAPI 后台调整状态。
 
 ## 排障
 

@@ -20,6 +20,12 @@ class Kernel extends ConsoleKernel
         $schedule->command('alerts:check')
             ->cron(config('alerts.schedule_cron'))
             ->withoutOverlapping();
+
+        if (config('channels.recovery_enabled')) {
+            $schedule->command('channels:recover')
+                ->cron(config('channels.schedule_cron'))
+                ->withoutOverlapping();
+        }
     }
 
     /**
