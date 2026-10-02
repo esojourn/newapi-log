@@ -13,7 +13,7 @@
    见[第 4 步](#4-额度预警的本地库)。
 
 2. **本项目自己的数据只有一个 SQLite 文件**（`database/alerts.sqlite`，额度预警的设置与
-   订阅、渠道恢复设置和动作日志）。它需要 PHP 进程可写。
+   订阅、渠道恢复设置、监控日志和动作日志）。它需要 PHP 进程可写。
 
 3. **`APP_KEY` 是加密根。** 飞书 Webhook、签名密钥和 NewAPI 管理员访问令牌以密文落盘（APP_KEY 派生）。
    换掉 APP_KEY 等于把所有已保存的 Webhook 作废 —— 服务不会崩，但那些订阅会被跳过，
@@ -200,7 +200,7 @@ php artisan config:clear && php artisan cache:clear && php artisan route:clear &
 
 | 对象 | 说明 |
 |---|---|
-| `database/alerts.sqlite` | 预警设置、监控名单、推送去重记录、渠道恢复设置与动作日志 |
+| `database/alerts.sqlite` | 预警设置、监控名单、推送去重记录、渠道恢复设置、监控日志与动作日志 |
 | `.env` 里的 `APP_KEY` | 解密 Webhook、签名密钥与 NewAPI 访问令牌的钥匙，丢了备份等于废掉 |
 
 ```bash

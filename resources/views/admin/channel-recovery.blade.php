@@ -122,6 +122,87 @@
             </form>
         </section>
 
+        <section class="bg-white rounded-lg shadow overflow-hidden" aria-labelledby="monitor-heading">
+            <div class="p-5 md:p-6 border-b space-y-4">
+                <div>
+                    <h2 id="monitor-heading" class="text-lg font-semibold">监控日志 <span class="text-sm font-normal text-gray-500">（{{ $monitorLogs->total() }} 条）</span></h2>
+                    <p class="text-xs text-gray-500 mt-1">每轮检查记录发现的自动禁用渠道，保留禁用原因和本次检测提示。试运行也会记录；测试正常后的恢复结果见下方恢复动作日志。时间均为 {{ config('app.timezone') }}。</p>
+                </div>
+                <form method="GET" action="{{ route('admin.channel-recovery') }}#monitor-heading" class="flex flex-wrap items-end gap-3">
+                    @foreach (['channel_id', 'result'] as $filter)
+                        @if (!empty($filters[$filter]))
+                            <input type="hidden" name="{{ $filter }}" value="{{ $filters[$filter] }}">
+                        @endif
+                    @endforeach
+                    <div>
+                        <label for="monitor-channel-id" class="block text-xs text-gray-600 mb-1">渠道 ID</label>
+                        <input type="number" min="1" step="1" id="monitor-channel-id" name="monitor_channel_id" class="alz-input text-sm w-32" placeholder="全部渠道" value="{{ $filters['monitor_channel_id'] ?? '' }}">
+                    </div>
+                    <div>
+                        <label for="monitor-result" class="block text-xs text-gray-600 mb-1">检测结果</label>
+                        <select id="monitor-result" name="monitor_result" class="alz-input text-sm">
+                            <option value="">全部结果</option>
+                            @foreach ($monitorResults as $value => $label)
+                                <option value="{{ $value }}" {{ ($filters['monitor_result'] ?? '') === $value ? 'selected' : '' }}>{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <button type="submit" class="alz-btn">筛选监控日志</button>
+                    @if (!empty($filters['monitor_channel_id']) || !empty($filters['monitor_result']))
+                        <a href="{{ route('admin.channel-recovery', array_intersect_key($filters, array_flip(['channel_id', 'result']))) }}#monitor-heading" class="alz-link text-sm py-2">清除筛选</a>
+                    @endif
+                </form>
+            </div>
+            @if ($monitorLogs->isEmpty())
+                <div class="px-5 py-12 text-center text-sm text-gray-500">{{ !empty($filters['monitor_channel_id']) || !empty($filters['monitor_result']) ? '没有符合条件的监控日志。' : '暂无监控日志。开启自动恢复后，检查发现自动禁用渠道时会记录在这里。' }}</div>
+            @else
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm" style="min-width: 1000px;">
+                        <thead class="alz-thead">
+                            <tr>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">发现时间 / 禁用时间</th>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">渠道</th>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">触发方式</th>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">自动禁用原因</th>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">检测结果</th>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">本次检测提示</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            @foreach ($monitorLogs as $log)
+                                <tr class="alz-tr align-top">
+                                    <td class="px-5 py-4 whitespace-nowrap text-gray-600">
+                                        <time datetime="{{ $log->created_at->toIso8601String() }}">{{ $log->created_at->format('Y-m-d H:i:s') }}</time>
+                                        <div class="text-xs text-gray-400 mt-1">禁用 {{ $log->disabled_at ? $log->disabled_at->format('Y-m-d H:i:s') : '时间未提供' }}</div>
+                                    </td>
+                                    <td class="px-5 py-4" style="min-width: 150px; max-width: 240px;">
+                                        <div class="font-medium break-all">{{ $log->channel_name ?: '未命名渠道' }}</div>
+                                        <div class="text-xs text-gray-500 mt-1">#{{ $log->channel_id }} · 自动禁用</div>
+                                    </td>
+                                    <td class="px-5 py-4 whitespace-nowrap text-gray-600">
+                                        {{ $log->source === 'scheduled' ? '定时任务' : '手动命令' }}
+                                        @if ($log->dry_run)
+                                            <div class="text-xs text-gray-500 mt-1">试运行</div>
+                                        @endif
+                                    </td>
+                                    <td class="px-5 py-4 text-gray-600" style="min-width: 220px; max-width: 320px;">
+                                        <div class="whitespace-pre-wrap break-all">{{ $log->disabled_reason ?? '上游未提供禁用原因。' }}</div>
+                                    </td>
+                                    <td class="px-5 py-4 whitespace-nowrap">
+                                        <span class="px-2 py-1 rounded-full text-xs {{ ['healthy' => 'bg-green-100 text-green-800', 'failed' => 'bg-red-100 text-red-700', 'error' => 'bg-red-100 text-red-700', 'pending' => 'bg-yellow-100 text-yellow-800'][$log->result] ?? 'bg-gray-100 text-gray-600' }}">{{ $monitorResults[$log->result] ?? $log->result }}</span>
+                                    </td>
+                                    <td class="px-5 py-4 text-gray-600" style="min-width: 240px; max-width: 360px;">
+                                        <div class="whitespace-pre-wrap break-all">{{ $log->message ?? '等待检测结果；长时间未完成请检查任务运行情况。' }}</div>
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+                <div class="px-5 py-4 border-t">{{ $monitorLogs->fragment('monitor-heading')->links() }}</div>
+            @endif
+        </section>
+
         <section class="bg-white rounded-lg shadow overflow-hidden" aria-labelledby="logs-heading">
             <div class="p-5 md:p-6 border-b space-y-4">
                 <div>
@@ -129,6 +210,11 @@
                     <p class="text-xs text-gray-500 mt-1">记录测试通过后的恢复尝试。试运行和未通过的检测不会产生恢复动作；未完成或未确认的记录需核对渠道实际状态。</p>
                 </div>
                 <form method="GET" action="{{ route('admin.channel-recovery') }}" class="flex flex-wrap items-end gap-3">
+                    @foreach (['monitor_channel_id', 'monitor_result'] as $filter)
+                        @if (!empty($filters[$filter]))
+                            <input type="hidden" name="{{ $filter }}" value="{{ $filters[$filter] }}">
+                        @endif
+                    @endforeach
                     <div>
                         <label for="log-channel-id" class="block text-xs text-gray-600 mb-1">渠道 ID</label>
                         <input type="number" min="1" step="1" id="log-channel-id" name="channel_id" class="alz-input text-sm w-32" placeholder="全部渠道" value="{{ $filters['channel_id'] ?? '' }}">
@@ -144,7 +230,7 @@
                     </div>
                     <button type="submit" class="alz-btn">筛选日志</button>
                     @if (!empty($filters['channel_id']) || !empty($filters['result']))
-                        <a href="{{ route('admin.channel-recovery') }}" class="alz-link text-sm py-2">清除筛选</a>
+                        <a href="{{ route('admin.channel-recovery', array_intersect_key($filters, array_flip(['monitor_channel_id', 'monitor_result']))) }}#logs-heading" class="alz-link text-sm py-2">清除筛选</a>
                     @endif
                 </form>
             </div>

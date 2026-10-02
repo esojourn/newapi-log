@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
 use App\Models\ChannelRecoverySetting;
 use App\Services\NewApiChannelClient;
@@ -17,12 +18,18 @@ class ChannelRecoveryController extends Controller
         $filters = $request->validate([
             'channel_id' => 'nullable|integer|min:1',
             'result' => ['nullable', Rule::in(array_keys(ChannelRecoveryLog::RESULTS))],
+            'monitor_channel_id' => 'nullable|integer|min:1',
+            'monitor_result' => ['nullable', Rule::in(array_keys(ChannelMonitorLog::RESULTS))],
         ]);
         $settings = ChannelRecoverySetting::current();
         $logs = ChannelRecoveryLog::query()
             ->when($filters['channel_id'] ?? null, fn ($query, $id) => $query->where('channel_id', $id))
             ->when($filters['result'] ?? null, fn ($query, $result) => $query->where('result', $result))
             ->orderByDesc('id')->paginate(25)->withQueryString();
+        $monitorLogs = ChannelMonitorLog::query()
+            ->when($filters['monitor_channel_id'] ?? null, fn ($query, $id) => $query->where('channel_id', $id))
+            ->when($filters['monitor_result'] ?? null, fn ($query, $result) => $query->where('result', $result))
+            ->orderByDesc('id')->paginate(25, ['*'], 'monitor_page')->withQueryString();
         $token = $settings->access_token;
 
         return response()->view('admin.channel-recovery', [
@@ -33,6 +40,8 @@ class ChannelRecoveryController extends Controller
             'logs' => $logs,
             'filters' => $filters,
             'results' => ChannelRecoveryLog::RESULTS,
+            'monitorLogs' => $monitorLogs,
+            'monitorResults' => ChannelMonitorLog::RESULTS,
         ])->header('Cache-Control', 'no-store, private');
     }
 

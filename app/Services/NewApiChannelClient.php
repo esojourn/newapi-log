@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Support\UpstreamMessage;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -70,18 +72,62 @@ class NewApiChannelClient
             && in_array($channel['auto_ban'] ?? null, [1, '1'], true);
     }
 
-    public function test(int $id): bool
+    /** @return array{disabled_at: ?Carbon, disabled_reason: ?string} */
+    public function disabledDetails(array $channel): array
+    {
+        $info = $channel['other_info'] ?? null;
+        if (is_string($info)) {
+            $info = json_decode($info, true);
+        }
+        $info = is_array($info) ? $info : [];
+        $timestamp = $info['status_time'] ?? null;
+        $validTimestamp = (is_int($timestamp) || (is_string($timestamp) && ctype_digit($timestamp)))
+            && $timestamp > 0 && $timestamp <= 253402300799;
+
+        return [
+            'disabled_at' => $validTimestamp ? Carbon::createFromTimestamp((int) $timestamp, config('app.timezone')) : null,
+            'disabled_reason' => $this->sanitizeMessage($info['status_reason'] ?? null, $channel),
+        ];
+    }
+
+    /** @return array{success: bool, message: ?string} */
+    public function test(int $id, array $channel = []): array
     {
         // 不传 model，交给 NewAPI 使用该渠道的 test_model 和协议适配器。
         $response = $this->request('GET', '/api/channel/test/' . $id);
         $payload = $response->json();
+        $message = $this->responseMessage(is_array($payload) ? $payload : [], $channel);
 
         if (!$response->successful() || !is_array($payload)
             || !is_bool($payload['success'] ?? null)) {
-            throw new RuntimeException('NewAPI 测试接口响应无效，HTTP ' . $response->status() . '。');
+            throw new RuntimeException('NewAPI 测试接口响应无效，HTTP ' . $response->status() . '。'
+                . ($message !== null ? ' 上游提示：' . $message : ''));
         }
 
-        return $payload['success'];
+        return ['success' => $payload['success'], 'message' => $message];
+    }
+
+    private function responseMessage(array $payload, array $channel): ?string
+    {
+        $error = $payload['error'] ?? null;
+        $messages = array_filter([
+            $this->sanitizeMessage($payload['message'] ?? null, $channel),
+            $this->sanitizeMessage(is_array($error) ? ($error['message'] ?? null) : $error, $channel),
+        ], fn ($value) => $value !== null);
+
+        return $messages ? UpstreamMessage::sanitize(implode("\n", array_unique($messages))) : null;
+    }
+
+    private function sanitizeMessage($message, array $channel): ?string
+    {
+        $secrets = [trim((string) $this->option('access_token'))];
+        if (is_string($channel['key'] ?? null)) {
+            $secrets[] = $channel['key'];
+            $keys = json_decode($channel['key'], true);
+            $secrets = array_merge($secrets, is_array($keys) ? array_values($keys) : explode("\n", $channel['key']));
+        }
+
+        return UpstreamMessage::sanitize($message, $secrets);
     }
 
     /** 测试耗时期间可能有人改过渠道；每次状态写入前重新核对。 */

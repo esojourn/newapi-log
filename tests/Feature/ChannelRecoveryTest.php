@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
 use App\Models\ChannelRecoverySetting;
 use App\Services\ChannelRecoveryChecker;
@@ -127,6 +128,10 @@ class ChannelRecoveryTest extends TestCase
         $this->assertSame(3, $action->from_status);
         $this->assertSame(1, $action->target_status);
         $this->assertNotNull($action->completed_at);
+        $monitor = ChannelMonitorLog::sole();
+        $this->assertSame(1, $monitor->channel_id);
+        $this->assertSame('healthy', $monitor->result);
+        $this->assertFalse($monitor->dry_run);
     }
 
     public function test_disabled_feature_does_not_query_database_or_send_requests(): void
@@ -163,6 +168,7 @@ class ChannelRecoveryTest extends TestCase
         $this->assertSame(0, $stats['checked']);
         $this->assertSame(1, $stats['skipped']);
         Http::assertSentCount(1);
+        $this->assertSame(0, ChannelMonitorLog::count());
     }
 
     /** @dataProvider ineligibleStates */
@@ -212,6 +218,7 @@ class ChannelRecoveryTest extends TestCase
         Http::assertSentCount(2);
         Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
         $this->assertSame(0, ChannelRecoveryLog::count());
+        $this->assertSame($status === 200 && ($body['success'] ?? null) === false ? 'failed' : 'error', ChannelMonitorLog::sole()->result);
     }
 
     public function test_timeout_is_redacted_and_does_not_stop_other_channels(): void
@@ -235,6 +242,8 @@ class ChannelRecoveryTest extends TestCase
         Log::shouldHaveReceived('warning')->once()->with('Channel recovery failed', [
             'channel_id' => 1, 'stage' => 'test', 'error' => 'NewAPI 请求超时或连接失败。',
         ]);
+        $this->assertSame('NewAPI 请求超时或连接失败。', ChannelMonitorLog::where('channel_id', 1)->sole()->message);
+        $this->assertSame('error', ChannelMonitorLog::where('channel_id', 1)->sole()->result);
     }
 
     public function test_dry_run_tests_health_without_enabling(): void
@@ -248,6 +257,8 @@ class ChannelRecoveryTest extends TestCase
         Http::assertSentCount(2);
         Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
         $this->assertSame(0, ChannelRecoveryLog::count());
+        $this->assertTrue(ChannelMonitorLog::sole()->dry_run);
+        $this->assertSame('healthy', ChannelMonitorLog::sole()->result);
     }
 
     public function test_legacy_api_fallback_sends_only_id_and_status(): void
@@ -408,6 +419,7 @@ class ChannelRecoveryTest extends TestCase
         $settings->update(['schedule_cron' => '*/7 * * * *']);
         $this->assertSame(1, $checker->run(false, null, true)['recovered']);
         $this->assertSame('scheduled', ChannelRecoveryLog::sole()->source);
+        $this->assertSame('scheduled', ChannelMonitorLog::sole()->source);
         Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer saved-admin-token')
             && $request->hasHeader('New-Api-User', '99'));
     }
@@ -467,6 +479,160 @@ class ChannelRecoveryTest extends TestCase
         $this->assertSame(1, $stats['failed']);
         $this->assertSame('pending', ChannelRecoveryLog::sole()->result);
         $this->assertNull(ChannelRecoveryLog::sole()->completed_at);
+    }
+
+    public function test_disabled_snapshot_is_saved_before_testing_and_survives_recovery(): void
+    {
+        $this->seedChannel(1);
+        $disabledAt = Carbon::parse('2026-10-02 10:00:00', config('app.timezone'));
+        $this->apiChannels[1]['other_info'] = json_encode([
+            'status_reason' => '上游余额不足，请充值后重试。',
+            'status_time' => $disabledAt->timestamp,
+        ]);
+        $this->onTest = function ($id) use ($disabledAt) {
+            $monitor = ChannelMonitorLog::sole();
+            $this->assertSame('pending', $monitor->result);
+            $this->assertSame('上游余额不足，请充值后重试。', $monitor->disabled_reason);
+            $this->assertTrue($monitor->disabled_at->equalTo($disabledAt));
+            $this->assertNull($monitor->completed_at);
+            $this->apiChannels[$id]['other_info'] = json_encode(['status_reason' => '状态已变化']);
+
+            return Http::response(['success' => true]);
+        };
+
+        $this->assertSame(1, app(ChannelRecoveryChecker::class)->run()['recovered']);
+        $this->assertSame('上游余额不足，请充值后重试。', ChannelMonitorLog::sole()->disabled_reason);
+        $this->assertSame('healthy', ChannelMonitorLog::sole()->result);
+        $this->assertNotNull(ChannelMonitorLog::sole()->completed_at);
+    }
+
+    public function test_every_failed_check_preserves_its_own_upstream_message(): void
+    {
+        $this->seedChannel(1);
+        $this->apiChannels[1]['other_info'] = ['status_reason' => '额度耗尽', 'status_time' => '1790899200'];
+        $this->onTest = fn () => Http::response(['success' => false, 'message' => '请充值账户余额']);
+        $checker = app(ChannelRecoveryChecker::class);
+        $this->assertSame(1, $checker->run()['failed']);
+        $this->onTest = fn () => Http::response(['success' => false, 'message' => '上游仍在限流，请稍后重试']);
+        $this->assertSame(1, $checker->run()['failed']);
+
+        $logs = ChannelMonitorLog::orderBy('id')->get();
+        $this->assertCount(2, $logs);
+        $this->assertSame(['请充值账户余额', '上游仍在限流，请稍后重试'], $logs->pluck('message')->all());
+        $this->assertSame(['额度耗尽', '额度耗尽'], $logs->pluck('disabled_reason')->all());
+        $this->assertSame(['failed', 'failed'], $logs->pluck('result')->all());
+        $this->assertSame(1790899200, $logs->first()->disabled_at->timestamp);
+        $this->assertSame(0, ChannelRecoveryLog::count());
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+    }
+
+    public function test_http_errors_include_structured_upstream_failure_details(): void
+    {
+        $this->seedChannel(1);
+        $this->onTest = fn () => Http::response(['message' => '请求失败', 'error' => ['message' => '模型暂不可用']], 503);
+
+        $this->assertSame(1, app(ChannelRecoveryChecker::class)->run()['failed']);
+
+        $monitor = ChannelMonitorLog::sole();
+        $this->assertSame('error', $monitor->result);
+        $this->assertStringContainsString('HTTP 503', $monitor->message);
+        $this->assertStringContainsString('请求失败', $monitor->message);
+        $this->assertStringContainsString('模型暂不可用', $monitor->message);
+    }
+
+    public function missingDisabledDetails(): array
+    {
+        return [
+            [null], [''], ['invalid-json'], ['null'], ['123'],
+            [['status_reason' => ['unexpected'], 'status_time' => -1]],
+            [['status_reason' => '', 'status_time' => 'not-a-time']],
+            [['status_time' => '99999999999999999999999999']],
+            [['status_time' => ['unexpected']]],
+        ];
+    }
+
+    /** @dataProvider missingDisabledDetails */
+    public function test_missing_or_malformed_disable_details_do_not_prevent_monitoring($details): void
+    {
+        $this->seedChannel(1);
+        $this->apiChannels[1]['other_info'] = $details;
+        $this->onTest = fn () => Http::response(['success' => false, 'message' => ['unexpected']]);
+
+        $this->assertSame(1, app(ChannelRecoveryChecker::class)->run()['failed']);
+
+        $monitor = ChannelMonitorLog::sole();
+        $this->assertSame('failed', $monitor->result);
+        $this->assertNull($monitor->disabled_reason);
+        $this->assertNull($monitor->disabled_at);
+        $this->assertSame('上游未提供失败原因。', $monitor->message);
+    }
+
+    public function test_monitor_messages_redact_credentials_without_discarding_failure_reason(): void
+    {
+        $this->seedChannel(1);
+        $this->apiChannels[1]['key'] = "opaque-channel-secret\nsecond-channel-secret";
+        $message = '余额不足 private-admin-token opaque-channel-secret second-channel-secret '
+            . 'sk-upstream-secret Bearer bearer-secret api_key=labelled-secret '
+            . 'https://user:password@upstream.example/api?token=query-secret';
+        $this->apiChannels[1]['other_info'] = ['status_reason' => $message];
+        $this->onTest = fn () => Http::response(['success' => false, 'error' => ['message' => $message]]);
+
+        $this->assertSame(1, app(ChannelRecoveryChecker::class)->run()['failed']);
+
+        $monitor = ChannelMonitorLog::sole();
+        foreach ([$monitor->disabled_reason, $monitor->message] as $text) {
+            $this->assertStringContainsString('余额不足', $text);
+            $this->assertStringContainsString('[已隐藏]', $text);
+            foreach (['private-admin-token', 'opaque-channel-secret', 'second-channel-secret', 'sk-upstream-secret', 'bearer-secret', 'labelled-secret', 'user:password', 'query-secret'] as $secret) {
+                $this->assertStringNotContainsString($secret, $text);
+            }
+        }
+    }
+
+    public function test_long_upstream_messages_are_bounded_and_raw_response_fields_are_not_saved(): void
+    {
+        $this->seedChannel(1);
+        $this->apiChannels[1]['other_info'] = ['status_reason' => str_repeat('禁用原因', 2000)];
+        $this->onTest = fn () => Http::response([
+            'success' => false, 'message' => str_repeat('请求失败', 2000), 'key' => 'do-not-save-response',
+        ]);
+
+        $this->assertSame(1, app(ChannelRecoveryChecker::class)->run()['failed']);
+
+        $monitor = ChannelMonitorLog::sole();
+        $this->assertLessThanOrEqual(4000, mb_strwidth($monitor->disabled_reason));
+        $this->assertLessThanOrEqual(4000, mb_strwidth($monitor->message));
+        $this->assertStringNotContainsString('do-not-save-response', $monitor->toJson());
+    }
+
+    public function test_monitor_storage_failure_prevents_unlogged_testing_or_recovery(): void
+    {
+        $this->seedChannel(1);
+        Schema::connection('alerts')->drop('channel_monitor_logs');
+
+        $stats = app(ChannelRecoveryChecker::class)->run();
+
+        $this->assertSame(1, $stats['failed']);
+        $this->assertSame(0, $stats['checked']);
+        $this->assertSame(0, $stats['recovered']);
+        Http::assertSentCount(1);
+    }
+
+    public function test_monitor_completion_failure_keeps_snapshot_pending_and_does_not_enable(): void
+    {
+        $this->seedChannel(1);
+        $this->apiChannels[1]['other_info'] = ['status_reason' => '上游服务不可用'];
+        DB::connection('alerts')->statement("CREATE TRIGGER deny_monitor_completion BEFORE UPDATE ON channel_monitor_logs BEGIN SELECT RAISE(FAIL, 'test monitor write failure'); END");
+
+        $stats = app(ChannelRecoveryChecker::class)->run();
+
+        $this->assertSame(1, $stats['failed']);
+        $this->assertSame(0, $stats['recovered']);
+        $this->assertSame('pending', ChannelMonitorLog::sole()->result);
+        $this->assertSame('上游服务不可用', ChannelMonitorLog::sole()->disabled_reason);
+        $this->assertNull(ChannelMonitorLog::sole()->completed_at);
+        $this->assertSame(0, ChannelRecoveryLog::count());
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
     }
 
     private function seedChannel(int $id, int $status = 3, ?int $autoBan = 1): void

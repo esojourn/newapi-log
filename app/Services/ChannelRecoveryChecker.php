@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
 use App\Models\ChannelRecoverySetting;
 use Cron\CronExpression;
@@ -56,6 +57,7 @@ class ChannelRecoveryChecker
                 $id = (int) $channel->id;
                 $stage = 'read';
                 $action = null;
+                $monitor = null;
 
                 try {
                     // API 再核对一次，数据库副本延迟或排队期间的人工修改都不能扩大检查范围。
@@ -65,9 +67,25 @@ class ChannelRecoveryChecker
                         continue;
                     }
 
+                    // 测试前保存禁用快照，成功恢复后上游可能覆盖原始禁用原因。
+                    $stage = 'monitor';
+                    $monitor = ChannelMonitorLog::create(array_merge([
+                        'channel_id' => $id,
+                        'channel_name' => Str::limit((string) ($details['name'] ?? ''), 255, ''),
+                        'source' => $scheduled ? 'scheduled' : 'manual',
+                        'dry_run' => $dryRun,
+                        'result' => 'pending',
+                    ], $this->client->disabledDetails($details)));
+
                     $stage = 'test';
                     $stats['checked']++;
-                    if (!$this->client->test($id)) {
+                    $probe = $this->client->test($id, $details);
+                    $monitor->update([
+                        'result' => $probe['success'] ? 'healthy' : 'failed',
+                        'message' => $probe['message'] ?? ($probe['success'] ? '渠道测试正常。' : '上游未提供失败原因。'),
+                        'completed_at' => now(),
+                    ]);
+                    if (!$probe['success']) {
                         $stats['failed']++;
                         Log::info('Channel recovery test failed', ['channel_id' => $id]);
                         continue;
@@ -110,6 +128,18 @@ class ChannelRecoveryChecker
                     }
                 } catch (Throwable $e) {
                     $stats['failed']++;
+                    if ($monitor !== null && $monitor->result === 'pending') {
+                        try {
+                            $monitor->update([
+                                'result' => 'error',
+                                'message' => $e instanceof RuntimeException && !($e instanceof QueryException)
+                                    ? $e->getMessage() : '检测未完成，请检查服务日志及本地日志存储。',
+                                'completed_at' => now(),
+                            ]);
+                        } catch (Throwable $monitorError) {
+                            Log::error('Channel monitor log could not be completed', ['log_id' => $monitor->id]);
+                        }
+                    }
                     if ($action !== null && $action->result === 'pending') {
                         try {
                             $action->update([

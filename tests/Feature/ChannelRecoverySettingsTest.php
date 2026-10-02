@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
 use App\Models\ChannelRecoverySetting;
 use Illuminate\Support\Facades\Artisan;
@@ -55,7 +56,7 @@ class ChannelRecoverySettingsTest extends TestCase
     {
         $response = $this->withSession(['admin_authenticated' => true])->get('/admin/channel-recovery');
 
-        $response->assertOk()->assertSee('恢复设置')->assertSee('恢复动作日志')
+        $response->assertOk()->assertSee('恢复设置')->assertSee('恢复动作日志')->assertSee('监控日志')
             ->assertSee('https://newapi.example')->assertSee('*/5 * * * *')
             ->assertSee('已配置，留空保留原令牌')->assertDontSee('secret-env-token', false);
         $this->assertArrayNotHasKey('access_token', $response->viewData('settings'));
@@ -196,6 +197,78 @@ class ChannelRecoverySettingsTest extends TestCase
         $this->assertSame(7, $response->viewData('logs')->first()->channel_id);
         $this->assertStringContainsString('channel_id=7', $response->viewData('logs')->url(2));
         $this->assertStringContainsString('result=recovered', $response->viewData('logs')->url(2));
+    }
+
+    public function test_monitor_logs_are_paginated_independently_and_upstream_text_is_escaped(): void
+    {
+        for ($id = 1; $id <= 27; $id++) {
+            $this->monitorLog(['channel_id' => $id]);
+        }
+        $this->monitorLog([
+            'channel_id' => 28,
+            'channel_name' => '<script>name()</script>',
+            'disabled_reason' => '<script>reason()</script>',
+            'message' => '<img src=x onerror=alert(1)>',
+            'dry_run' => true,
+        ]);
+        $this->log();
+
+        $response = $this->withSession(['admin_authenticated' => true])->get('/admin/channel-recovery');
+        $response->assertOk()->assertSee('自动禁用原因')->assertSee('本次检测提示')->assertSee('试运行')
+            ->assertSee('&lt;script&gt;reason()&lt;/script&gt;', false)
+            ->assertDontSee('<script>reason()</script>', false)->assertDontSee('<script>name()</script>', false)
+            ->assertDontSee('<img src=x onerror=alert(1)>', false);
+        $this->assertSame(28, $response->viewData('monitorLogs')->total());
+        $this->assertCount(25, $response->viewData('monitorLogs'));
+        $this->assertSame(28, $response->viewData('monitorLogs')->first()->channel_id);
+
+        $second = $this->get('/admin/channel-recovery?monitor_page=2')->assertOk();
+        $this->assertCount(3, $second->viewData('monitorLogs'));
+        $this->assertSame(3, $second->viewData('monitorLogs')->first()->channel_id);
+        $this->assertCount(1, $second->viewData('logs'));
+    }
+
+    public function test_monitor_logs_can_be_filtered_by_channel_and_detection_result(): void
+    {
+        $this->monitorLog(['channel_id' => 7]);
+        $this->monitorLog(['channel_id' => 7, 'result' => 'healthy']);
+        $this->monitorLog(['channel_id' => 8]);
+
+        $response = $this->withSession(['admin_authenticated' => true])
+            ->get('/admin/channel-recovery?monitor_channel_id=7&monitor_result=failed')->assertOk();
+
+        $this->assertSame(1, $response->viewData('monitorLogs')->total());
+        $this->assertSame(7, $response->viewData('monitorLogs')->first()->channel_id);
+        $this->assertStringContainsString('monitor_channel_id=7', $response->viewData('monitorLogs')->url(2));
+        $this->assertStringContainsString('monitor_result=failed', $response->viewData('monitorLogs')->url(2));
+        $this->assertStringContainsString('monitor_page=2', $response->viewData('monitorLogs')->url(2));
+        $this->get('/admin/channel-recovery?monitor_result=invalid')->assertSessionHasErrors('monitor_result');
+        $this->get('/admin/channel-recovery?monitor_channel_id=-1')->assertSessionHasErrors('monitor_channel_id');
+    }
+
+    public function test_monitor_logs_are_visible_only_to_admins(): void
+    {
+        $this->monitorLog(['disabled_reason' => '管理员专用禁用原因']);
+        $this->get('/admin/channel-recovery?monitor_result=failed')->assertRedirect('/admin/login')
+            ->assertDontSee('管理员专用禁用原因');
+        $this->withSession(['user_api_key' => 'sk-user-token'])
+            ->get('/admin/channel-recovery?monitor_result=failed')->assertRedirect('/admin/login');
+        $this->withSession(['admin_authenticated' => true])->get('/admin/channel-recovery')
+            ->assertOk()->assertSee('管理员专用禁用原因');
+    }
+
+    private function monitorLog(array $overrides = []): ChannelMonitorLog
+    {
+        return ChannelMonitorLog::create(array_merge([
+            'channel_id' => 1,
+            'channel_name' => '测试渠道',
+            'source' => 'scheduled',
+            'disabled_reason' => '上游余额不足',
+            'disabled_at' => now()->subMinutes(5),
+            'result' => 'failed',
+            'message' => '账户额度已耗尽，请充值',
+            'completed_at' => now(),
+        ], $overrides));
     }
 
     private function form(array $overrides = []): array

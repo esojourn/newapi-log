@@ -1,5 +1,15 @@
 # Repository Guidelines
 
+## 项目定位
+
+本程序是 new-api 的外挂管理与运维应用，独立部署，通过读取 new-api 数据库和调用其管理 API 扩展以下功能：
+
+- **日志统计**：日志查询、用量与费用统计、可视化仪表盘。
+- **渠道管理**：渠道状态监控、自动禁用记录与失败原因追踪、渠道检测与自动恢复。
+- **余额预警**：余额监控、阈值预警和飞书通知。
+
+新增功能应围绕上述定位扩展。外部 new-api 数据库保持只读，渠道状态变更通过 new-api 管理 API 完成；本程序的设置、监控日志和预警状态保存在本地 alerts 数据库。
+
 ## Project Structure & Module Organization
 
 This Laravel 8 application targets PHP 8.1 and provides NewAPI log queries, usage dashboards, and Feishu balance alerts.
