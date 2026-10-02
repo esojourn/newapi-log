@@ -200,7 +200,7 @@ php artisan config:clear && php artisan cache:clear && php artisan route:clear &
 
 | 对象 | 说明 |
 |---|---|
-| `database/alerts.sqlite` | 预警设置、监控名单、推送去重记录、渠道恢复设置、监控日志与动作日志 |
+| `database/alerts.sqlite` | 预警设置、监控名单、推送去重记录、渠道恢复设置、最近一轮检查、监控日志与动作日志 |
 | `.env` 里的 `APP_KEY` | 解密 Webhook、签名密钥与 NewAPI 访问令牌的钥匙，丢了备份等于废掉 |
 
 ```bash

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
+use App\Models\ChannelRecoveryRun;
 use App\Models\ChannelRecoverySetting;
 use App\Services\NewApiChannelClient;
 use Cron\CronExpression;
@@ -42,6 +43,7 @@ class ChannelRecoveryController extends Controller
             'results' => ChannelRecoveryLog::RESULTS,
             'monitorLogs' => $monitorLogs,
             'monitorResults' => ChannelMonitorLog::RESULTS,
+            'lastRun' => ChannelRecoveryRun::current(),
         ])->header('Cache-Control', 'no-store, private');
     }
 

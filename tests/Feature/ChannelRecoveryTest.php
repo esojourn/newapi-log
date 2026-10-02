@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
+use App\Models\ChannelRecoveryRun;
 use App\Models\ChannelRecoverySetting;
 use App\Services\ChannelRecoveryChecker;
 use Illuminate\Console\Scheduling\Schedule;
@@ -633,6 +634,82 @@ class ChannelRecoveryTest extends TestCase
         $this->assertNull(ChannelMonitorLog::sole()->completed_at);
         $this->assertSame(0, ChannelRecoveryLog::count());
         Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+    }
+
+    public function test_last_run_records_read_failures_that_produce_no_monitor_log(): void
+    {
+        $this->seedChannel(1);
+        $this->seedChannel(2);
+        unset($this->apiChannels[2]);
+        $this->onTest = fn () => Http::response(['success' => false, 'message' => 'quota exhausted']);
+
+        app(ChannelRecoveryChecker::class)->run(false, null, false);
+
+        $run = ChannelRecoveryRun::current();
+        $this->assertSame('manual', $run->source);
+        $this->assertNotNull($run->finished_at);
+        $this->assertNull($run->error);
+        $this->assertSame([1, 0, 0, 0, 2], [$run->checked, $run->healthy, $run->recovered, $run->skipped, $run->failed]);
+        $this->assertSame([
+            ['channel_id' => 1, 'stage' => 'test', 'message' => 'quota exhausted'],
+            ['channel_id' => 2, 'stage' => 'read', 'message' => 'NewAPI 渠道详情格式无效。'],
+        ], $run->failures);
+        $this->assertTrue($run->hasProblems());
+        $this->assertSame([1], ChannelMonitorLog::pluck('channel_id')->all());
+    }
+
+    public function test_last_run_records_configuration_error_and_is_replaced_by_next_run(): void
+    {
+        $this->seedChannel(1);
+        config(['channels.base_url' => '']);
+
+        $this->artisan('channels:recover')->assertExitCode(1);
+
+        $run = ChannelRecoveryRun::current();
+        $this->assertNotNull($run->finished_at);
+        $this->assertStringContainsString('NEW_API_BASE_URL', $run->error);
+        Http::assertNothingSent();
+
+        config(['channels.base_url' => 'https://newapi.example']);
+        Carbon::setTestNow('2026-10-02 10:07:00');
+        app(ChannelRecoveryChecker::class)->run(false, null, true);
+
+        $run = ChannelRecoveryRun::current();
+        $this->assertSame(1, ChannelRecoveryRun::count());
+        $this->assertSame('scheduled', $run->source);
+        $this->assertNull($run->error);
+        $this->assertNull($run->failures);
+        $this->assertSame(1, $run->recovered);
+        $this->assertFalse($run->hasProblems());
+    }
+
+    public function test_last_run_is_not_touched_by_disabled_undue_or_overlapping_calls(): void
+    {
+        $this->seedChannel(1);
+        Carbon::setTestNow('2026-10-02 10:01:00');
+        app(ChannelRecoveryChecker::class)->run(false, null, true);
+        $this->assertNull(ChannelRecoveryRun::current());
+
+        $lock = Cache::lock('channels:recover', 86400);
+        $this->assertTrue($lock->get());
+        $this->artisan('channels:recover')->assertExitCode(1);
+        $lock->release();
+        $this->assertNull(ChannelRecoveryRun::current());
+
+        config(['channels.recovery_enabled' => false]);
+        app(ChannelRecoveryChecker::class)->run();
+        $this->assertNull(ChannelRecoveryRun::current());
+    }
+
+    public function test_run_status_write_failure_does_not_block_recovery(): void
+    {
+        $this->seedChannel(1);
+        Schema::connection('alerts')->drop('channel_recovery_runs');
+
+        $stats = app(ChannelRecoveryChecker::class)->run();
+
+        $this->assertSame(1, $stats['recovered']);
+        $this->assertSame(1, $this->apiChannels[1]['status']);
     }
 
     private function seedChannel(int $id, int $status = 3, ?int $autoBan = 1): void

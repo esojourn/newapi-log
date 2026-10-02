@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
+use App\Models\ChannelRecoveryRun;
 use App\Models\ChannelRecoverySetting;
 use Cron\CronExpression;
 use Illuminate\Database\QueryException;
@@ -36,16 +37,21 @@ class ChannelRecoveryChecker
             return $stats;
         }
 
-        $this->client->configure($settings->configuration());
-        $this->client->validateConfiguration();
-
         // 覆盖定时任务与手动命令，避免同一个渠道被重复探测/启用。
+        // 先取锁再记录本轮：重叠的调用不能覆盖正在运行那一轮的状态。
         $lock = Cache::lock('channels:recover', 86400);
         if (!$lock->get()) {
             throw new RuntimeException('已有渠道恢复检查正在运行，请稍后重试。');
         }
 
+        $run = $this->startRun($dryRun, $scheduled);
+        $failures = [];
+        $runError = null;
+
         try {
+            $this->client->configure($settings->configuration());
+            $this->client->validateConfiguration();
+
             // 只读 id，不读取渠道密钥；按 id 分批，恢复导致结果集缩小时也不会漏渠道。
             $channels = DB::table('channels')->select('id')
                 ->where('auto_ban', 1)
@@ -87,6 +93,7 @@ class ChannelRecoveryChecker
                     ]);
                     if (!$probe['success']) {
                         $stats['failed']++;
+                        $this->addFailure($failures, $id, $stage, $probe['message'] ?? '上游未提供失败原因。');
                         Log::info('Channel recovery test failed', ['channel_id' => $id]);
                         continue;
                     }
@@ -128,12 +135,12 @@ class ChannelRecoveryChecker
                     }
                 } catch (Throwable $e) {
                     $stats['failed']++;
+                    $this->addFailure($failures, $id, $stage, $this->safeMessage($e) ?? '内部错误（' . class_basename($e) . '），请检查服务日志及本地日志存储。');
                     if ($monitor !== null && $monitor->result === 'pending') {
                         try {
                             $monitor->update([
                                 'result' => 'error',
-                                'message' => $e instanceof RuntimeException && !($e instanceof QueryException)
-                                    ? $e->getMessage() : '检测未完成，请检查服务日志及本地日志存储。',
+                                'message' => $this->safeMessage($e) ?? '检测未完成，请检查服务日志及本地日志存储。',
                                 'completed_at' => now(),
                             ]);
                         } catch (Throwable $monitorError) {
@@ -155,16 +162,74 @@ class ChannelRecoveryChecker
                     Log::warning('Channel recovery failed', [
                         'channel_id' => $id,
                         'stage' => $stage,
-                        'error' => $e instanceof RuntimeException && !($e instanceof QueryException) ? $e->getMessage() : get_class($e),
+                        'error' => $this->safeMessage($e) ?? get_class($e),
                     ]);
                 }
             }
+        } catch (Throwable $e) {
+            $runError = $this->safeMessage($e) ?? '数据库访问失败（' . class_basename($e) . '），请检查本地 alerts 库与 NewAPI channels 表的只读连接。';
+            throw $e;
         } finally {
+            $this->finishRun($run, $stats, $failures, $runError);
             $lock->release();
         }
 
         Log::info('Channel recovery completed', array_merge(['dry_run' => $dryRun], $stats));
 
         return $stats;
+    }
+
+    /** 接口异常文字已脱敏，可直接展示；数据库等其他异常可能带连接信息，只给类名。 */
+    private function safeMessage(Throwable $e): ?string
+    {
+        return $e instanceof RuntimeException && !($e instanceof QueryException) ? $e->getMessage() : null;
+    }
+
+    private function addFailure(array &$failures, int $id, string $stage, string $message): void
+    {
+        if (count($failures) < ChannelRecoveryRun::MAX_FAILURES) {
+            $failures[] = ['channel_id' => $id, 'stage' => $stage, 'message' => Str::limit($message, 500)];
+        }
+    }
+
+    /** 运行状态只用于展示：写入失败不影响检查与恢复本身。 */
+    private function startRun(bool $dryRun, bool $scheduled): ?ChannelRecoveryRun
+    {
+        try {
+            $run = ChannelRecoveryRun::query()->findOrNew(1);
+            $run->forceFill([
+                'id' => 1,
+                'source' => $scheduled ? 'scheduled' : 'manual',
+                'dry_run' => $dryRun,
+                'started_at' => now(),
+                'finished_at' => null,
+                'checked' => 0, 'healthy' => 0, 'recovered' => 0, 'skipped' => 0, 'failed' => 0,
+                'error' => null,
+                'failures' => null,
+            ])->save();
+
+            return $run;
+        } catch (Throwable $e) {
+            Log::error('Channel recovery run status could not be saved', ['error' => get_class($e)]);
+
+            return null;
+        }
+    }
+
+    private function finishRun(?ChannelRecoveryRun $run, array $stats, array $failures, ?string $error): void
+    {
+        if ($run === null) {
+            return;
+        }
+
+        try {
+            $run->update(array_merge($stats, [
+                'finished_at' => now(),
+                'error' => $error,
+                'failures' => $failures ?: null,
+            ]));
+        } catch (Throwable $e) {
+            Log::error('Channel recovery run status could not be completed', ['error' => get_class($e)]);
+        }
     }
 }

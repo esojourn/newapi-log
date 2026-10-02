@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
+use App\Models\ChannelRecoveryRun;
 use App\Models\ChannelRecoverySetting;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -244,6 +245,25 @@ class ChannelRecoverySettingsTest extends TestCase
         $this->assertStringContainsString('monitor_page=2', $response->viewData('monitorLogs')->url(2));
         $this->get('/admin/channel-recovery?monitor_result=invalid')->assertSessionHasErrors('monitor_result');
         $this->get('/admin/channel-recovery?monitor_channel_id=-1')->assertSessionHasErrors('monitor_channel_id');
+    }
+
+    public function test_admin_page_shows_last_run_failures(): void
+    {
+        $page = fn () => $this->withSession(['admin_authenticated' => true])->get('/admin/channel-recovery');
+        $page()->assertOk()->assertSee('尚无检查记录');
+
+        ChannelRecoveryRun::create([
+            'id' => 1, 'source' => 'scheduled', 'started_at' => now(), 'finished_at' => now(), 'failed' => 1,
+            'failures' => [['channel_id' => 59, 'stage' => 'read', 'message' => 'NewAPI 管理接口请求失败，HTTP 404 <b>']],
+        ]);
+        $page()->assertOk()->assertSee('最近一轮检查')->assertSee('失败 1')
+            ->assertSee('#59 · 读取渠道详情：NewAPI 管理接口请求失败，HTTP 404 &lt;b&gt;', false);
+
+        ChannelRecoveryRun::current()->update(['error' => '请配置 NEW_API_BASE_URL', 'failures' => null]);
+        $page()->assertSee('本轮未能完成：请配置 NEW_API_BASE_URL');
+
+        ChannelRecoveryRun::current()->update(['error' => null, 'finished_at' => null, 'started_at' => now()->subHours(2)]);
+        $page()->assertSee('未完成，进程可能已中断');
     }
 
     public function test_monitor_logs_are_visible_only_to_admins(): void

@@ -49,6 +49,40 @@
             <div role="alert" class="bg-yellow-50 text-yellow-800 p-4 rounded-lg text-sm">已保存的访问令牌无法读取，请重新填写后保存。</div>
         @endif
 
+        <section class="bg-white rounded-lg shadow p-5 md:p-6" aria-labelledby="last-run-heading">
+            <h2 id="last-run-heading" class="text-lg font-semibold">最近一轮检查</h2>
+            @if (!$lastRun)
+                <p class="text-sm text-gray-500 mt-2">尚无检查记录。开启自动恢复且检查计划到期后，这里会显示每轮结果。</p>
+            @else
+                @php
+                    $runUnfinished = $lastRun->finished_at === null;
+                    $runStale = $runUnfinished && $lastRun->started_at->lt(now()->subHour());
+                    $stageLabels = ['read' => '读取渠道详情', 'monitor' => '写入监控日志', 'test' => '渠道测试', 'audit' => '写入恢复日志', 'enable' => '恢复启用'];
+                @endphp
+                <div role="{{ $lastRun->hasProblems() || $runStale ? 'alert' : 'status' }}" class="mt-3 p-4 rounded-lg text-sm {{ $lastRun->error !== null || $runStale ? 'bg-red-50 text-red-700' : ($lastRun->failed > 0 ? 'bg-yellow-50 text-yellow-800' : ($runUnfinished ? 'bg-gray-50 text-gray-700' : 'bg-green-50 text-green-800')) }}">
+                    <p>
+                        <time datetime="{{ $lastRun->started_at->toIso8601String() }}">{{ $lastRun->started_at->format('Y-m-d H:i:s') }}</time>
+                        · {{ $lastRun->source === 'scheduled' ? '定时任务' : '手动命令' }}{{ $lastRun->dry_run ? '（试运行）' : '' }}
+                        · @if ($runStale) 未完成，进程可能已中断 @elseif ($runUnfinished) 进行中 @else 检查 {{ $lastRun->checked }}，测试正常 {{ $lastRun->healthy }}，已恢复 {{ $lastRun->recovered }}，跳过 {{ $lastRun->skipped }}，失败 {{ $lastRun->failed }} @endif
+                    </p>
+                    @if ($lastRun->error !== null)
+                        <p class="mt-2 font-medium whitespace-pre-wrap break-all">本轮未能完成：{{ $lastRun->error }}</p>
+                    @endif
+                    @if (!empty($lastRun->failures))
+                        <ul class="mt-2 space-y-1">
+                            @foreach ($lastRun->failures as $failure)
+                                <li class="whitespace-pre-wrap break-all">#{{ $failure['channel_id'] }} · {{ $stageLabels[$failure['stage']] ?? $failure['stage'] }}：{{ $failure['message'] }}</li>
+                            @endforeach
+                        </ul>
+                        @if ($lastRun->failed > count($lastRun->failures))
+                            <p class="mt-1 text-xs">仅显示前 {{ count($lastRun->failures) }} 条，完整记录见服务日志。</p>
+                        @endif
+                    @endif
+                </div>
+                <p class="text-xs text-gray-500 mt-2">读取渠道详情失败时不会生成监控日志，请以这里的提示为准；常见原因是 NewAPI 地址、访问令牌或用户 ID 配置错误。</p>
+            @endif
+        </section>
+
         <section class="bg-white rounded-lg shadow p-5 md:p-6" aria-labelledby="settings-heading">
             <div class="flex flex-wrap items-start justify-between gap-3 mb-5">
                 <div>
