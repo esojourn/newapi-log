@@ -16,6 +16,16 @@
         .alz-input:focus { outline: none; box-shadow: 0 0 0 2px #1D93AB; border-color: transparent; }
         .alz-thead { background: #f0fafc; color: #0f5a6b; }
         .alz-tr:hover { background: #f5fbfd; }
+        .alz-log-table { table-layout: fixed; }
+        .alz-log-table th, .alz-log-table td { padding: .625rem .75rem; vertical-align: top; }
+        .alz-log-detail summary { position: relative; padding-right: 1rem; cursor: pointer; list-style: none; border-radius: .125rem; }
+        .alz-log-detail summary::-webkit-details-marker { display: none; }
+        .alz-log-detail summary::after { content: '+'; position: absolute; top: 0; right: 0; color: #1D93AB; }
+        .alz-log-detail[open] summary::after { content: '−'; }
+        .alz-log-detail summary:focus-visible { outline: 2px solid #1D93AB; outline-offset: 2px; }
+        .alz-log-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-height: 2.5rem; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.25rem; }
+        .alz-log-preview-single { -webkit-line-clamp: 1; max-height: 1.25rem; }
+        .alz-log-detail[open] .alz-log-preview { display: block; max-height: none; }
         input[type="checkbox"] { accent-color: #1D93AB; }
     </style>
 </head>
@@ -161,6 +171,7 @@
                 <div>
                     <h2 id="monitor-heading" class="text-lg font-semibold">监控日志 <span class="text-sm font-normal text-gray-500">（{{ $monitorLogs->total() }} 条）</span></h2>
                     <p class="text-xs text-gray-500 mt-1">每轮检查记录发现的自动禁用渠道，保留禁用原因和本次检测提示。试运行也会记录；测试正常后的恢复结果见下方恢复动作日志。时间均为 {{ config('app.timezone') }}。</p>
+                    <p class="text-xs text-gray-500 mt-1">长内容最多显示两行；悬停查看全文，点击 + 展开并复制，再次点击收起。</p>
                 </div>
                 <form method="GET" action="{{ route('admin.channel-recovery') }}#monitor-heading" class="flex flex-wrap items-end gap-3">
                     @foreach (['channel_id', 'result'] as $filter)
@@ -191,7 +202,15 @@
                 <div class="px-5 py-12 text-center text-sm text-gray-500">{{ !empty($filters['monitor_channel_id']) || !empty($filters['monitor_result']) ? '没有符合条件的监控日志。' : '暂无监控日志。开启自动恢复后，检查发现自动禁用渠道时会记录在这里。' }}</div>
             @else
                 <div class="overflow-x-auto">
-                    <table class="w-full text-sm" style="min-width: 1000px;">
+                    <table class="alz-log-table w-full text-sm" style="min-width: 1100px;">
+                        <colgroup>
+                            <col style="width: 205px;">
+                            <col style="width: 150px;">
+                            <col style="width: 100px;">
+                            <col>
+                            <col style="width: 100px;">
+                            <col>
+                        </colgroup>
                         <thead class="alz-thead">
                             <tr>
                                 <th scope="col" class="text-left px-5 py-3 font-medium">发现时间 / 禁用时间</th>
@@ -209,8 +228,8 @@
                                         <time datetime="{{ $log->created_at->toIso8601String() }}">{{ $log->created_at->format('Y-m-d H:i:s') }}</time>
                                         <div class="text-xs text-gray-400 mt-1">禁用 {{ $log->disabled_at ? $log->disabled_at->format('Y-m-d H:i:s') : '时间未提供' }}</div>
                                     </td>
-                                    <td class="px-5 py-4" style="min-width: 150px; max-width: 240px;">
-                                        <div class="font-medium break-all">{{ $log->channel_name ?: '未命名渠道' }}</div>
+                                    <td class="px-5 py-4">
+                                        <div class="font-medium"><x-compact-log-text :text="$log->channel_name ?: '未命名渠道'" :lines="1" /></div>
                                         <div class="text-xs text-gray-500 mt-1">#{{ $log->channel_id }} · 自动禁用</div>
                                     </td>
                                     <td class="px-5 py-4 whitespace-nowrap text-gray-600">
@@ -219,14 +238,14 @@
                                             <div class="text-xs text-gray-500 mt-1">试运行</div>
                                         @endif
                                     </td>
-                                    <td class="px-5 py-4 text-gray-600" style="min-width: 220px; max-width: 320px;">
-                                        <div class="whitespace-pre-wrap break-all">{{ $log->disabled_reason ?? '上游未提供禁用原因。' }}</div>
+                                    <td class="px-5 py-4 text-gray-600">
+                                        <x-compact-log-text :text="$log->disabled_reason ?? '上游未提供禁用原因。'" />
                                     </td>
                                     <td class="px-5 py-4 whitespace-nowrap">
                                         <span class="px-2 py-1 rounded-full text-xs {{ ['healthy' => 'bg-green-100 text-green-800', 'failed' => 'bg-red-100 text-red-700', 'error' => 'bg-red-100 text-red-700', 'pending' => 'bg-yellow-100 text-yellow-800'][$log->result] ?? 'bg-gray-100 text-gray-600' }}">{{ $monitorResults[$log->result] ?? $log->result }}</span>
                                     </td>
-                                    <td class="px-5 py-4 text-gray-600" style="min-width: 240px; max-width: 360px;">
-                                        <div class="whitespace-pre-wrap break-all">{{ $log->message ?? '等待检测结果；长时间未完成请检查任务运行情况。' }}</div>
+                                    <td class="px-5 py-4 text-gray-600">
+                                        <x-compact-log-text :text="$log->message ?? '等待检测结果；长时间未完成请检查任务运行情况。'" />
                                     </td>
                                 </tr>
                             @endforeach
@@ -242,6 +261,7 @@
                 <div>
                     <h2 id="logs-heading" class="text-lg font-semibold">恢复动作日志 <span class="text-sm font-normal text-gray-500">（{{ $logs->total() }} 条）</span></h2>
                     <p class="text-xs text-gray-500 mt-1">记录测试通过后的恢复尝试。试运行和未通过的检测不会产生恢复动作；未完成或未确认的记录需核对渠道实际状态。</p>
+                    <p class="text-xs text-gray-500 mt-1">长内容最多显示两行；悬停查看全文，点击 + 展开并复制，再次点击收起。</p>
                 </div>
                 <form method="GET" action="{{ route('admin.channel-recovery') }}" class="flex flex-wrap items-end gap-3">
                     @foreach (['monitor_channel_id', 'monitor_result'] as $filter)
@@ -272,7 +292,15 @@
                 <div class="px-5 py-12 text-center text-sm text-gray-500">{{ !empty($filters['channel_id']) || !empty($filters['result']) ? '没有符合条件的恢复日志。' : '暂无恢复动作。渠道测试正常并尝试恢复后，记录会显示在这里。' }}</div>
             @else
                 <div class="overflow-x-auto">
-                    <table class="w-full text-sm" style="min-width: 820px;">
+                    <table class="alz-log-table w-full text-sm" style="min-width: 1000px;">
+                        <colgroup>
+                            <col style="width: 205px;">
+                            <col style="width: 150px;">
+                            <col style="width: 100px;">
+                            <col style="width: 155px;">
+                            <col style="width: 100px;">
+                            <col>
+                        </colgroup>
                         <thead class="alz-thead">
                             <tr>
                                 <th scope="col" class="text-left px-5 py-3 font-medium">发起时间</th>
@@ -292,8 +320,8 @@
                                             <div class="text-xs text-gray-400 mt-1">完成 {{ $log->completed_at->format('Y-m-d H:i:s') }}</div>
                                         @endif
                                     </td>
-                                    <td class="px-5 py-4" style="min-width: 150px; max-width: 260px;">
-                                        <div class="font-medium break-all">{{ $log->channel_name ?: '未命名渠道' }}</div>
+                                    <td class="px-5 py-4">
+                                        <div class="font-medium"><x-compact-log-text :text="$log->channel_name ?: '未命名渠道'" :lines="1" /></div>
                                         <div class="text-xs text-gray-500 mt-1">#{{ $log->channel_id }}</div>
                                     </td>
                                     <td class="px-5 py-4 whitespace-nowrap text-gray-600">{{ $log->source === 'scheduled' ? '定时任务' : '手动命令' }}</td>
@@ -301,7 +329,7 @@
                                     <td class="px-5 py-4 whitespace-nowrap">
                                         <span class="px-2 py-1 rounded-full text-xs {{ ['recovered' => 'bg-green-100 text-green-800', 'skipped' => 'bg-gray-100 text-gray-600', 'failed' => 'bg-red-100 text-red-700', 'pending' => 'bg-yellow-100 text-yellow-800'][$log->result] ?? 'bg-gray-100 text-gray-600' }}">{{ $results[$log->result] ?? $log->result }}</span>
                                     </td>
-                                    <td class="px-5 py-4 text-gray-600" style="min-width: 230px; max-width: 360px;">{{ $log->message }}</td>
+                                    <td class="px-5 py-4 text-gray-600"><x-compact-log-text :text="$log->message ?? ''" /></td>
                                 </tr>
                             @endforeach
                         </tbody>

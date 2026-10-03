@@ -200,6 +200,20 @@ class ChannelRecoverySettingsTest extends TestCase
         $this->assertStringContainsString('result=recovered', $response->viewData('logs')->url(2));
     }
 
+    public function test_compact_logs_preserve_full_multiline_text_and_escape_tooltip_attributes(): void
+    {
+        $message = str_repeat('重复错误信息 ', 80) . "\n最后一行：\"<script>alert(1)</script>";
+        $this->monitorLog(['disabled_reason' => $message, 'message' => $message]);
+        $this->log(['message' => $message]);
+
+        $response = $this->withSession(['admin_authenticated' => true])->get('/admin/channel-recovery');
+
+        $response->assertOk()->assertDontSee('<script>alert(1)</script>', false);
+        $html = $response->getContent();
+        $this->assertSame(3, substr_count($html, 'title="' . e($message) . '"'));
+        $this->assertSame(3, substr_count($html, '<span class="alz-log-preview">' . e($message) . '</span>'));
+    }
+
     public function test_monitor_logs_are_paginated_independently_and_upstream_text_is_escaped(): void
     {
         for ($id = 1; $id <= 27; $id++) {
