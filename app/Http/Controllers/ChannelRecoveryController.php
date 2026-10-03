@@ -6,6 +6,7 @@ use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
 use App\Models\ChannelRecoveryRun;
 use App\Models\ChannelRecoverySetting;
+use App\Services\ChannelLogGroups;
 use App\Services\NewApiChannelClient;
 use Cron\CronExpression;
 use Illuminate\Http\Request;
@@ -14,7 +15,7 @@ use Illuminate\Validation\Rule;
 /** 所有路由都在 admin 中间件内；普通 Key 登录不能访问设置或日志。 */
 class ChannelRecoveryController extends Controller
 {
-    public function index(Request $request)
+    public function index(Request $request, ChannelLogGroups $logGroups)
     {
         $filters = $request->validate([
             'channel_id' => 'nullable|integer|min:1',
@@ -23,14 +24,18 @@ class ChannelRecoveryController extends Controller
             'monitor_result' => ['nullable', Rule::in(array_keys(ChannelMonitorLog::RESULTS))],
         ]);
         $settings = ChannelRecoverySetting::current();
-        $logs = ChannelRecoveryLog::query()
+        $logQuery = ChannelRecoveryLog::query()
             ->when($filters['channel_id'] ?? null, fn ($query, $id) => $query->where('channel_id', $id))
-            ->when($filters['result'] ?? null, fn ($query, $result) => $query->where('result', $result))
-            ->orderByDesc('id')->paginate(25)->withQueryString();
-        $monitorLogs = ChannelMonitorLog::query()
+            ->when($filters['result'] ?? null, fn ($query, $result) => $query->where('result', $result));
+        $monitorQuery = ChannelMonitorLog::query()
             ->when($filters['monitor_channel_id'] ?? null, fn ($query, $id) => $query->where('channel_id', $id))
-            ->when($filters['monitor_result'] ?? null, fn ($query, $result) => $query->where('result', $result))
-            ->orderByDesc('id')->paginate(25, ['*'], 'monitor_page')->withQueryString();
+            ->when($filters['monitor_result'] ?? null, fn ($query, $result) => $query->where('result', $result));
+        $logs = $logGroups->paginate($logQuery, [
+            'channel_id', 'result', 'message', 'source', 'from_status', 'target_status',
+        ]);
+        $monitorLogs = $logGroups->paginate($monitorQuery, [
+            'channel_id', 'result', 'disabled_reason', 'message', 'source', 'dry_run',
+        ], 'monitor_page');
         $token = $settings->access_token;
 
         return response()->view('admin.channel-recovery', [
@@ -39,9 +44,11 @@ class ChannelRecoveryController extends Controller
             'tokenConfigured' => $token !== null && $token !== '',
             'tokenUnreadable' => !empty($settings->getAttributes()['access_token']) && $token === null,
             'logs' => $logs,
+            'logCount' => $logQuery->count(),
             'filters' => $filters,
             'results' => ChannelRecoveryLog::RESULTS,
             'monitorLogs' => $monitorLogs,
+            'monitorLogCount' => $monitorQuery->count(),
             'monitorResults' => ChannelMonitorLog::RESULTS,
             'lastRun' => ChannelRecoveryRun::current(),
         ])->header('Cache-Control', 'no-store, private');

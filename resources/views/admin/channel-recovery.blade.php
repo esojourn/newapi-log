@@ -169,8 +169,9 @@
         <section class="bg-white rounded-lg shadow overflow-hidden" aria-labelledby="monitor-heading">
             <div class="p-5 md:p-6 border-b space-y-4">
                 <div>
-                    <h2 id="monitor-heading" class="text-lg font-semibold">监控日志 <span class="text-sm font-normal text-gray-500">（{{ $monitorLogs->total() }} 条）</span></h2>
+                    <h2 id="monitor-heading" class="text-lg font-semibold">监控日志 <span class="text-sm font-normal text-gray-500">（{{ $monitorLogs->total() }} 组 / {{ $monitorLogCount }} 条）</span></h2>
                     <p class="text-xs text-gray-500 mt-1">每轮检查记录发现的自动禁用渠道，保留禁用原因和本次检测提示。试运行也会记录；测试正常后的恢复结果见下方恢复动作日志。时间均为 {{ config('app.timezone') }}。</p>
+                    <p class="text-xs text-gray-500 mt-1">相同渠道、结果和错误正文合并显示，忽略 request id，按最近出现排序；不同触发方式、试运行分别计数。正文展示最近记录，点击时间旁的 + 查看其禁用时间。</p>
                     <p class="text-xs text-gray-500 mt-1">长内容最多显示两行；悬停查看全文，点击 + 展开并复制，再次点击收起。</p>
                 </div>
                 <form method="GET" action="{{ route('admin.channel-recovery') }}#monitor-heading" class="flex flex-wrap items-end gap-3">
@@ -204,7 +205,8 @@
                 <div class="overflow-x-auto">
                     <table class="alz-log-table w-full text-sm" style="min-width: 1100px;">
                         <colgroup>
-                            <col style="width: 205px;">
+                            <col style="width: 230px;">
+                            <col style="width: 75px;">
                             <col style="width: 150px;">
                             <col style="width: 100px;">
                             <col>
@@ -213,7 +215,8 @@
                         </colgroup>
                         <thead class="alz-thead">
                             <tr>
-                                <th scope="col" class="text-left px-5 py-3 font-medium">发现时间 / 禁用时间</th>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">最近 / 首次出现</th>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">次数</th>
                                 <th scope="col" class="text-left px-5 py-3 font-medium">渠道</th>
                                 <th scope="col" class="text-left px-5 py-3 font-medium">触发方式</th>
                                 <th scope="col" class="text-left px-5 py-3 font-medium">自动禁用原因</th>
@@ -225,9 +228,10 @@
                             @foreach ($monitorLogs as $log)
                                 <tr class="alz-tr align-top">
                                     <td class="px-5 py-4 whitespace-nowrap text-gray-600">
-                                        <time datetime="{{ $log->created_at->toIso8601String() }}">{{ $log->created_at->format('Y-m-d H:i:s') }}</time>
-                                        <div class="text-xs text-gray-400 mt-1">禁用 {{ $log->disabled_at ? $log->disabled_at->format('Y-m-d H:i:s') : '时间未提供' }}</div>
+                                        <x-log-group-times :first-seen="$log->first_seen_at" :last-seen="$log->last_seen_at"
+                                            :detail="'最近记录的禁用时间：' . ($log->disabled_at ? $log->disabled_at->format('Y-m-d H:i:s') : '未提供')" />
                                     </td>
+                                    <td class="px-5 py-4 whitespace-nowrap font-medium text-gray-700">{{ $log->occurrence_count }} 次</td>
                                     <td class="px-5 py-4">
                                         <div class="font-medium"><x-compact-log-text :text="$log->channel_name ?: '未命名渠道'" :lines="1" /></div>
                                         <div class="text-xs text-gray-500 mt-1">#{{ $log->channel_id }} · 自动禁用</div>
@@ -259,8 +263,9 @@
         <section class="bg-white rounded-lg shadow overflow-hidden" aria-labelledby="logs-heading">
             <div class="p-5 md:p-6 border-b space-y-4">
                 <div>
-                    <h2 id="logs-heading" class="text-lg font-semibold">恢复动作日志 <span class="text-sm font-normal text-gray-500">（{{ $logs->total() }} 条）</span></h2>
+                    <h2 id="logs-heading" class="text-lg font-semibold">恢复动作日志 <span class="text-sm font-normal text-gray-500">（{{ $logs->total() }} 组 / {{ $logCount }} 条）</span></h2>
                     <p class="text-xs text-gray-500 mt-1">记录测试通过后的恢复尝试。试运行和未通过的检测不会产生恢复动作；未完成或未确认的记录需核对渠道实际状态。</p>
+                    <p class="text-xs text-gray-500 mt-1">相同渠道、结果和说明合并显示，忽略 request id，按最近出现排序；不同触发方式、恢复动作分别计数。正文展示最近记录，点击时间旁的 + 查看其完成时间。</p>
                     <p class="text-xs text-gray-500 mt-1">长内容最多显示两行；悬停查看全文，点击 + 展开并复制，再次点击收起。</p>
                 </div>
                 <form method="GET" action="{{ route('admin.channel-recovery') }}" class="flex flex-wrap items-end gap-3">
@@ -294,7 +299,8 @@
                 <div class="overflow-x-auto">
                     <table class="alz-log-table w-full text-sm" style="min-width: 1000px;">
                         <colgroup>
-                            <col style="width: 205px;">
+                            <col style="width: 230px;">
+                            <col style="width: 75px;">
                             <col style="width: 150px;">
                             <col style="width: 100px;">
                             <col style="width: 155px;">
@@ -303,7 +309,8 @@
                         </colgroup>
                         <thead class="alz-thead">
                             <tr>
-                                <th scope="col" class="text-left px-5 py-3 font-medium">发起时间</th>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">最近 / 首次出现</th>
+                                <th scope="col" class="text-left px-5 py-3 font-medium">次数</th>
                                 <th scope="col" class="text-left px-5 py-3 font-medium whitespace-nowrap">渠道</th>
                                 <th scope="col" class="text-left px-5 py-3 font-medium">触发方式</th>
                                 <th scope="col" class="text-left px-5 py-3 font-medium">恢复动作</th>
@@ -315,11 +322,10 @@
                             @foreach ($logs as $log)
                                 <tr class="alz-tr">
                                     <td class="px-5 py-4 whitespace-nowrap text-gray-600">
-                                        <time datetime="{{ $log->created_at->toIso8601String() }}">{{ $log->created_at->format('Y-m-d H:i:s') }}</time>
-                                        @if ($log->completed_at)
-                                            <div class="text-xs text-gray-400 mt-1">完成 {{ $log->completed_at->format('Y-m-d H:i:s') }}</div>
-                                        @endif
+                                        <x-log-group-times :first-seen="$log->first_seen_at" :last-seen="$log->last_seen_at"
+                                            :detail="'最近记录的完成时间：' . ($log->completed_at ? $log->completed_at->format('Y-m-d H:i:s') : '未完成')" />
                                     </td>
+                                    <td class="px-5 py-4 whitespace-nowrap font-medium text-gray-700">{{ $log->occurrence_count }} 次</td>
                                     <td class="px-5 py-4">
                                         <div class="font-medium"><x-compact-log-text :text="$log->channel_name ?: '未命名渠道'" :lines="1" /></div>
                                         <div class="text-xs text-gray-500 mt-1">#{{ $log->channel_id }}</div>
@@ -335,7 +341,7 @@
                         </tbody>
                     </table>
                 </div>
-                <div class="px-5 py-4 border-t">{{ $logs->links() }}</div>
+                <div class="px-5 py-4 border-t">{{ $logs->fragment('logs-heading')->links() }}</div>
             @endif
         </section>
     </main>

@@ -280,6 +280,119 @@ class ChannelRecoverySettingsTest extends TestCase
         $page()->assertSee('未完成，进程可能已中断');
     }
 
+    public function test_monitor_errors_with_different_request_ids_are_grouped_with_full_time_range(): void
+    {
+        $reason = 'status_code=503, No credentials available. (request id: disabled-request)';
+        foreach (['20', '25', '30'] as $minute) {
+            $error = 'No credentials available. Please add or enable credentials via Admin API or ***.json.'
+                . ' (request id: 2026100312' . $minute . 'A) (request id: 2026100312' . $minute . 'B)';
+            $message = 'bad response status code 503, message: ' . $error
+                . ', body: ' . json_encode(['error' => ['type' => '<nil>', 'message' => $error], 'type' => 'error']);
+            $this->monitorLog([
+                'channel_id' => 115, 'channel_name' => $minute === '30' ? 'suc-high' : '旧渠道名',
+                'disabled_reason' => $reason, 'message' => $message,
+                'created_at' => '2026-10-03 12:' . $minute . ':01',
+                'disabled_at' => '2026-10-03 10:11:26',
+            ]);
+        }
+        // 较晚写入的其他记录时间更早，排序仍以最近出现时间为准。
+        $this->monitorLog(['channel_id' => 8, 'created_at' => '2026-10-03 12:22:01']);
+
+        $response = $this->withSession(['admin_authenticated' => true])->get('/admin/channel-recovery');
+        $response->assertOk()->assertSee('2 组 / 4 条')->assertSee('3 次')->assertSee('suc-high')
+            ->assertSee('2026-10-03 12:20:01')->assertSee('2026-10-03 12:30:01')
+            ->assertSee($message)->assertSee('最近记录的禁用时间：2026-10-03 10:11:26');
+        $groups = $response->viewData('monitorLogs');
+        $this->assertSame(2, $groups->total());
+        $this->assertSame(115, $groups->first()->channel_id);
+        $this->assertSame(3, $groups->first()->occurrence_count);
+        $this->assertSame('2026-10-03 12:20:01', $groups->first()->first_seen_at->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-10-03 12:30:01', $groups->first()->last_seen_at->format('Y-m-d H:i:s'));
+        $this->assertSame(4, ChannelMonitorLog::count());
+        $this->assertStringContainsString('202610031220A', ChannelMonitorLog::first()->message);
+    }
+
+    public function test_monitor_grouping_keeps_different_errors_and_execution_modes_separate(): void
+    {
+        $this->monitorLog();
+        $this->monitorLog(['channel_name' => '改名后渠道', 'disabled_at' => now()->subHour()]);
+        $variants = [
+            ['channel_id' => 2], ['result' => 'error'], ['disabled_reason' => '其他禁用原因'],
+            ['message' => '其他检测错误'], ['source' => 'manual'], ['dry_run' => true],
+            ['message' => null], ['message' => ''],
+        ];
+        foreach ($variants as $variant) {
+            $this->monitorLog($variant);
+        }
+
+        $response = $this->withSession(['admin_authenticated' => true])->get('/admin/channel-recovery')->assertOk();
+        $groups = $response->viewData('monitorLogs');
+        $this->assertSame(1 + count($variants), $groups->total());
+        $this->assertSame(2 + count($variants), $response->viewData('monitorLogCount'));
+        $this->assertSame(2, $groups->firstWhere('channel_name', '改名后渠道')->occurrence_count);
+    }
+
+    public function test_recovery_groups_ignore_request_ids_and_keep_results_and_actions_separate(): void
+    {
+        $this->log(['message' => 'HTTP 503 (request id: first)', 'created_at' => '2026-10-03 12:20:01']);
+        $this->log(['message' => 'HTTP 503 (request id: last)', 'created_at' => '2026-10-03 12:30:01']);
+        $variants = [
+            ['channel_id' => 2], ['result' => 'failed'], ['source' => 'manual'],
+            ['from_status' => 2], ['target_status' => 2], ['message' => 'HTTP 504 (request id: last)'],
+        ];
+        foreach ($variants as $variant) {
+            $this->log(array_merge(['message' => 'HTTP 503 (request id: last)', 'created_at' => '2026-10-03 12:25:01'], $variant));
+        }
+
+        $response = $this->withSession(['admin_authenticated' => true])->get('/admin/channel-recovery')->assertOk();
+        $groups = $response->viewData('logs');
+        $this->assertSame(1 + count($variants), $groups->total());
+        $this->assertSame(2 + count($variants), $response->viewData('logCount'));
+        $this->assertSame(2, $groups->first()->occurrence_count);
+        $this->assertSame('HTTP 503 (request id: last)', $groups->first()->message);
+        $this->assertSame('2026-10-03 12:20:01', $groups->first()->first_seen_at->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-10-03 12:30:01', $groups->first()->last_seen_at->format('Y-m-d H:i:s'));
+        $this->assertSame(2 + count($variants), ChannelRecoveryLog::count());
+    }
+
+    public function test_grouping_happens_before_independent_pagination_and_preserves_filters(): void
+    {
+        for ($id = 1; $id <= 27; $id++) {
+            $this->monitorLog(['channel_id' => $id, 'created_at' => '2026-10-03 12:20:01']);
+            $this->log(['channel_id' => $id, 'created_at' => '2026-10-03 12:20:01']);
+        }
+        for ($index = 0; $index < 30; $index++) {
+            $this->monitorLog(['channel_id' => 27, 'created_at' => '2026-10-03 12:30:01']);
+            $this->log(['channel_id' => 27, 'created_at' => '2026-10-03 12:30:01']);
+        }
+
+        $response = $this->withSession(['admin_authenticated' => true])
+            ->get('/admin/channel-recovery?monitor_result=failed&result=recovered')->assertOk();
+        foreach (['monitorLogs', 'logs'] as $key) {
+            $groups = $response->viewData($key);
+            $this->assertSame(27, $groups->total());
+            $this->assertCount(25, $groups);
+            $this->assertSame(31, $groups->first()->occurrence_count);
+            $this->assertStringContainsString('monitor_result=failed', $groups->url(2));
+            $this->assertStringContainsString('result=recovered', $groups->url(2));
+        }
+        $response->assertSee('27 组 / 57 条');
+        $second = $this->get('/admin/channel-recovery?monitor_page=2')->assertOk();
+        $this->assertCount(2, $second->viewData('monitorLogs'));
+        $this->assertCount(25, $second->viewData('logs'));
+        $second = $this->get('/admin/channel-recovery?page=2')->assertOk();
+        $this->assertCount(25, $second->viewData('monitorLogs'));
+        $this->assertCount(2, $second->viewData('logs'));
+
+        $filtered = $this->get('/admin/channel-recovery?monitor_channel_id=27&monitor_result=failed&channel_id=27&result=recovered')->assertOk();
+        foreach (['monitorLogs', 'logs'] as $key) {
+            $this->assertSame(1, $filtered->viewData($key)->total());
+            $this->assertSame(31, $filtered->viewData($key)->first()->occurrence_count);
+        }
+        $this->assertSame(31, $filtered->viewData('monitorLogCount'));
+        $this->assertSame(31, $filtered->viewData('logCount'));
+    }
+
     public function test_monitor_logs_are_visible_only_to_admins(): void
     {
         $this->monitorLog(['disabled_reason' => '管理员专用禁用原因']);
