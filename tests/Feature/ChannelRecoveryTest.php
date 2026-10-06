@@ -57,6 +57,8 @@ class ChannelRecoveryTest extends TestCase
             $table->string('name')->nullable();
             $table->integer('status');
             $table->integer('auto_ban')->nullable();
+            $table->bigInteger('priority')->nullable()->default(0);
+            $table->unsignedBigInteger('weight')->nullable()->default(0);
         });
 
         Http::fake(function ($request) {

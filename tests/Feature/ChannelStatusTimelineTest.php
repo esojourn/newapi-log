@@ -35,6 +35,8 @@ class ChannelStatusTimelineTest extends TestCase
             $table->string('name');
             $table->integer('status');
             $table->integer('auto_ban');
+            $table->bigInteger('priority')->nullable()->default(0);
+            $table->unsignedBigInteger('weight')->nullable()->default(0);
             $table->string('key');
         });
         Http::fake();
@@ -50,13 +52,21 @@ class ChannelStatusTimelineTest extends TestCase
     public function test_capture_reads_only_monitored_channel_states_and_writes_to_alerts(): void
     {
         foreach ([1 => [1, 1], 2 => [3, 1], 3 => [2, 1], 4 => [1, 0]] as $id => [$status, $autoBan]) {
-            DB::table('channels')->insert(['id' => $id, 'name' => '渠道 ' . $id, 'status' => $status, 'auto_ban' => $autoBan, 'key' => 'never-read-this-key']);
+            DB::table('channels')->insert([
+                'id' => $id, 'name' => '渠道 ' . $id, 'status' => $status, 'auto_ban' => $autoBan,
+                'priority' => $id === 3 ? null : $id * 10, 'weight' => $id === 3 ? null : $id * 20,
+                'key' => 'never-read-this-key',
+            ]);
         }
         DB::enableQueryLog();
         app(ChannelStatusTimeline::class)->capture(ChannelRecoverySetting::current(), null);
 
         $this->assertSame([1, 2, 3], ChannelStatusSample::orderBy('channel_id')->pluck('channel_id')->all());
         $this->assertSame('2026-10-06 13:01:00', ChannelStatusSample::first()->expires_at->toDateTimeString());
+        $metadata = DB::connection('alerts')->table('channel_monitor_metadata')->orderBy('channel_id')->get();
+        $this->assertSame([1, 2, 3], $metadata->pluck('channel_id')->all());
+        $this->assertSame([10, 20, 0], $metadata->pluck('priority')->all());
+        $this->assertSame([20, 40, 0], $metadata->pluck('weight')->all());
         foreach (DB::getQueryLog() as $query) {
             $this->assertStringStartsWith('select ', strtolower($query['query']));
             $this->assertStringNotContainsString('key', $query['query']);
@@ -73,6 +83,69 @@ class ChannelStatusTimelineTest extends TestCase
         }
         app(ChannelStatusTimeline::class)->capture(ChannelRecoverySetting::current(), 2);
         $this->assertSame([2], ChannelStatusSample::pluck('channel_id')->all());
+        $this->assertSame([2], DB::connection('alerts')->table('channel_monitor_metadata')->pluck('channel_id')->all());
+    }
+
+    public function test_capture_updates_existing_channel_priority_and_weight(): void
+    {
+        DB::table('channels')->insert([
+            'id' => 1, 'name' => '渠道', 'status' => 1, 'auto_ban' => 1,
+            'priority' => 10, 'weight' => 20, 'key' => 'secret',
+        ]);
+        app(ChannelStatusTimeline::class)->capture(ChannelRecoverySetting::current(), null);
+        DB::table('channels')->where('id', 1)->update(['priority' => -5, 'weight' => 80]);
+        app(ChannelStatusTimeline::class)->capture(ChannelRecoverySetting::current(), null);
+
+        $metadata = DB::connection('alerts')->table('channel_monitor_metadata')->get();
+        $this->assertCount(1, $metadata);
+        $this->assertSame(-5, $metadata->first()->priority);
+        $this->assertSame(80, $metadata->first()->weight);
+    }
+
+    public function test_channels_are_sorted_by_priority_and_weight_before_pagination(): void
+    {
+        foreach (range(1, 27) as $id) {
+            $this->sample('11:00', 1, ['channel_id' => $id]);
+            $this->rank($id, 0, 0);
+        }
+        $this->rank(1, -1, 999);
+        $this->rank(5, 12, 50);
+        $this->rank(25, 8, 15);
+        $this->rank(26, 12, 5);
+        $this->rank(27, 12, 50);
+
+        $response = $this->withSession(['admin_authenticated' => true])
+            ->get('/admin/channel-recovery?timeline_range=hour')->assertOk();
+        $this->assertSame([5, 27, 26, 25], array_slice(array_column($response->viewData('timeline')['rows'], 'id'), 0, 4));
+        $response = $this->get('/admin/channel-recovery?timeline_range=hour&timeline_page=2')->assertOk();
+        $this->assertSame([24, 1], array_column($response->viewData('timeline')['rows'], 'id'));
+        $response = $this->get('/admin/channel-recovery?timeline_range=hour&timeline_channel_id=27')->assertOk();
+        $this->assertSame([27], array_column($response->viewData('timeline')['rows'], 'id'));
+    }
+
+    public function test_history_uses_latest_collected_channel_ranking(): void
+    {
+        foreach (range(1, 3) as $id) {
+            $this->sample('11:00', 1, ['channel_id' => $id]);
+        }
+        $this->rank(1, 100, 100);
+        $this->rank(1, 5, 10);
+        $this->rank(2, 10, 5);
+        $this->rank(3, 5, 20);
+
+        $this->assertSame([2, 3, 1], array_column($this->timeline()['rows'], 'id'));
+        $this->assertSame([2, 3, 1], array_column($this->timeline(['timeline_end' => '2026-10-06T09:00'])['rows'], 'id'));
+    }
+
+    public function test_legacy_channels_without_ranking_are_preserved_after_ranked_channels(): void
+    {
+        $this->sample('11:00', 1);
+        $this->monitor('11:10', ['channel_id' => 2]);
+        $this->recovery('11:20', ['channel_id' => 4]);
+        $this->sample('11:00', 1, ['channel_id' => 3]);
+        $this->rank(3, -1, 0);
+
+        $this->assertSame([3, 1, 2, 4], array_column($this->timeline()['rows'], 'id'));
     }
 
     public function test_timeline_uses_disabled_timestamp_and_confirmed_recovery(): void
@@ -254,5 +327,12 @@ class ChannelStatusTimelineTest extends TestCase
     private function timestamp(string $time): int
     {
         return Carbon::parse('2026-10-06 ' . $time . ':00', 'Asia/Shanghai')->timestamp;
+    }
+
+    private function rank(int $id, int $priority, int $weight): void
+    {
+        DB::connection('alerts')->table('channel_monitor_metadata')->updateOrInsert(
+            ['channel_id' => $id], ['priority' => $priority, 'weight' => $weight, 'updated_at' => now()]
+        );
     }
 }

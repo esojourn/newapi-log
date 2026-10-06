@@ -51,7 +51,7 @@ NEW_API_USER_ID=1
 - `NEW_API_BASE_URL` 必须与 `DB_*` 指向**同一个 NewAPI 实例**。填站点地址，不加 `/v1` 或 `/api/channel`；支持站点部署路径。
 - `NEW_API_ACCESS_TOKEN` 使用 NewAPI 管理员账号的个人访问令牌，`NEW_API_USER_ID` 为该账号的数字 ID。模型调用用的 `sk-...` 令牌不能替代管理员访问令牌。
 - 管理账号需要读取、测试和更新渠道状态的权限；传统更新接口还需要渠道编辑权限。
-- 外部数据库账号仍然只需要 `SELECT` 权限，需能读取 `channels.id`、`channels.name`、`channels.status`、`channels.auto_ban`。新增表只在本地 SQLite 中。
+- 外部数据库账号仍然只需要 `SELECT` 权限，需能读取 `channels.id`、`channels.name`、`channels.status`、`channels.auto_ban`、`channels.priority`、`channels.weight`。新增表只在本地 SQLite 中。
 - 访问令牌使用现有 `APP_KEY` 加密保存，页面不回显，也不在验证失败时放入 session。留空保留现有令牌；勾选清除必须同时关闭自动恢复，清除后不会回退到环境令牌。
 - 页面保存过后，修改上述 `.env` 值不会覆盖页面设置，包括启停开关。此时请通过页面修改。
 
@@ -119,6 +119,8 @@ cron 使用与 PHP-FPM 相同的用户。默认文件缓存支持防重入锁；
 ### 渠道状态时间轴
 
 更新后执行上述 alerts 专用迁移，新增本地 `channel_status_samples` 表。每轮实际执行的检查采集 `auto_ban=1` 渠道，包括已启用与手动禁用的渠道，仅查询状态，不对这些渠道发起测试或恢复。试运行也保存状态采样；指定 `--channel-id` 时只采集该渠道。关闭开关或检查计划未到期时不采集。
+
+渠道在分页之前按优先级降序排列，同优先级按权重降序排列，两者相同时按渠道 ID 升序排列。排序使用最近一次监控采集的配置，查看历史时段也采用该顺序。优先级和权重保存在本地 `channel_monitor_metadata` 表，每个渠道保留一条最新记录；更新后需执行上述 alerts 专用迁移，并等待下一轮检查采集排序信息。历史渠道暂未采集排序信息时保留展示，排在已采集的渠道之后。
 
 图表由本地状态采样、原始监控日志及已确认恢复的动作日志生成；查看页面不访问外部 NewAPI 数据库或管理 API。新状态采集失败会在「最近一轮检查」显示提示，已有恢复流程继续执行。
 

@@ -34,11 +34,12 @@ class ChannelStatusTimeline
     {
         $observedAt = now();
         $expiresAt = $this->expiresAt($observedAt, $settings->schedule_cron);
-        DB::table('channels')->select(['id', 'name', 'status'])
+        DB::table('channels')->select(['id', 'name', 'status', 'priority', 'weight'])
             ->where('auto_ban', 1)
             ->when($onlyChannelId !== null, fn ($query) => $query->where('id', $onlyChannelId))
             ->chunkById(100, function ($channels) use ($observedAt, $expiresAt) {
                 $samples = [];
+                $metadata = [];
                 foreach ($channels as $channel) {
                     $samples[] = [
                         'channel_id' => $channel->id,
@@ -47,8 +48,18 @@ class ChannelStatusTimeline
                         'observed_at' => $observedAt->toDateTimeString(),
                         'expires_at' => $expiresAt->toDateTimeString(),
                     ];
+                    $metadata[] = [
+                        'channel_id' => $channel->id,
+                        'priority' => $channel->priority ?? 0,
+                        'weight' => $channel->weight ?? 0,
+                        'updated_at' => $observedAt->toDateTimeString(),
+                    ];
                 }
-                ChannelStatusSample::insert($samples);
+                DB::connection('alerts')->transaction(function () use ($samples, $metadata) {
+                    ChannelStatusSample::insert($samples);
+                    DB::connection('alerts')->table('channel_monitor_metadata')
+                        ->upsert($metadata, ['channel_id'], ['priority', 'weight', 'updated_at']);
+                });
             });
     }
 
@@ -66,8 +77,12 @@ class ChannelStatusTimeline
             ->union(ChannelMonitorLog::query()->select('channel_id'))
             ->union(ChannelRecoveryLog::query()->select('channel_id'));
         $channels = DB::connection('alerts')->query()->fromSub($ids, 'monitored_channels')
-            ->when($channelId, fn ($query) => $query->where('channel_id', $channelId))
-            ->orderBy('channel_id')->paginate(25, ['channel_id'], 'timeline_page')->withQueryString();
+            ->leftJoin('channel_monitor_metadata as channel_sort', 'monitored_channels.channel_id', '=', 'channel_sort.channel_id')
+            ->when($channelId, fn ($query) => $query->where('monitored_channels.channel_id', $channelId))
+            ->orderByRaw('channel_sort.priority IS NULL ASC')
+            ->orderByDesc('channel_sort.priority')->orderByDesc('channel_sort.weight')
+            ->orderBy('monitored_channels.channel_id')
+            ->paginate(25, ['monitored_channels.channel_id'], 'timeline_page')->withQueryString();
         $channelIds = $channels->pluck('channel_id')->all();
         $samples = $this->records(new ChannelStatusSample(), 'observed_at', $channelIds, $start, $end)->toBase()
             ->selectRaw('id, channel_id, channel_name, observed_at AS at, expires_at, status, NULL AS disabled_at, 0 AS priority');

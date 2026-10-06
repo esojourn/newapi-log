@@ -3,7 +3,7 @@
         <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
                 <h2 id="timeline-heading" class="text-lg font-semibold">渠道状态时间轴 <span class="text-sm font-normal text-gray-500">（{{ $timeline['channels']->total() }} 个渠道）</span></h2>
-                <p class="text-xs text-gray-500 mt-1">每行一个渠道，横轴为时间。正常表示渠道已启用；自动禁用表示故障停用。悬停或点击色块查看时段。</p>
+                <p class="text-xs text-gray-500 mt-1">每行一个渠道，按优先级、权重从高到低排列，横轴为时间。正常表示渠道已启用；自动禁用表示故障停用。悬停或点击色块查看时段。</p>
             </div>
             <div class="flex flex-wrap items-center gap-3 text-xs text-gray-600" aria-label="状态图例">
                 @foreach ($timelineStates as $state => $label)
