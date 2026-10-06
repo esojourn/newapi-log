@@ -7,6 +7,7 @@ use App\Models\ChannelRecoveryLog;
 use App\Models\ChannelRecoveryRun;
 use App\Models\ChannelRecoverySetting;
 use App\Services\ChannelLogGroups;
+use App\Services\ChannelStatusTimeline;
 use App\Services\NewApiChannelClient;
 use Cron\CronExpression;
 use Illuminate\Http\Request;
@@ -15,13 +16,16 @@ use Illuminate\Validation\Rule;
 /** 所有路由都在 admin 中间件内；普通 Key 登录不能访问设置或日志。 */
 class ChannelRecoveryController extends Controller
 {
-    public function index(Request $request, ChannelLogGroups $logGroups)
+    public function index(Request $request, ChannelLogGroups $logGroups, ChannelStatusTimeline $statusTimeline)
     {
         $filters = $request->validate([
             'channel_id' => 'nullable|integer|min:1',
             'result' => ['nullable', Rule::in(array_keys(ChannelRecoveryLog::RESULTS))],
             'monitor_channel_id' => 'nullable|integer|min:1',
             'monitor_result' => ['nullable', Rule::in(array_keys(ChannelMonitorLog::RESULTS))],
+            'timeline_channel_id' => 'nullable|integer|min:1',
+            'timeline_range' => ['nullable', Rule::in(array_keys(ChannelStatusTimeline::RANGES))],
+            'timeline_end' => 'nullable|date_format:Y-m-d\TH:i|before_or_equal:now',
         ]);
         $settings = ChannelRecoverySetting::current();
         $logQuery = ChannelRecoveryLog::query()
@@ -51,6 +55,9 @@ class ChannelRecoveryController extends Controller
             'monitorLogCount' => $monitorQuery->count(),
             'monitorResults' => ChannelMonitorLog::RESULTS,
             'lastRun' => ChannelRecoveryRun::current(),
+            'timeline' => $statusTimeline->build($filters, $settings),
+            'timelineRanges' => ChannelStatusTimeline::RANGES,
+            'timelineStates' => ChannelStatusTimeline::STATES,
         ])->header('Cache-Control', 'no-store, private');
     }
 

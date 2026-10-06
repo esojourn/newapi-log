@@ -26,6 +26,28 @@
         .alz-log-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-height: 2.5rem; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.25rem; }
         .alz-log-preview-single { -webkit-line-clamp: 1; max-height: 1.25rem; }
         .alz-log-detail[open] .alz-log-preview { display: block; max-height: none; }
+        .alz-timeline-dot { width: .6rem; height: .6rem; border-radius: 50%; display: inline-block; }
+        .alz-timeline-online { background: #10b981; }
+        .alz-timeline-disabled { background: #ef4444; }
+        .alz-timeline-manual { background: #f59e0b; }
+        .alz-timeline-unknown { background: #e5e7eb; }
+        .alz-timeline-scroll { overflow: auto; max-height: 480px; }
+        .alz-timeline-table { min-width: 940px; table-layout: fixed; border-collapse: separate; border-spacing: 0; }
+        .alz-timeline-table thead th { position: sticky; top: 0; z-index: 3; background: #f0fafc; color: #0f5a6b; }
+        .alz-timeline-table tbody th, .alz-timeline-table tbody td { border-top: 1px solid #f3f4f6; }
+        .alz-timeline-table .alz-timeline-channel { position: sticky; left: 0; z-index: 2; background: white; }
+        .alz-timeline-table thead .alz-timeline-channel { z-index: 4; background: #f0fafc; }
+        .alz-timeline-axis { position: relative; height: 42px; }
+        .alz-timeline-tick { position: absolute; top: 14px; transform: translateX(-50%); white-space: nowrap; font-size: .75rem; }
+        .alz-timeline-tick:first-child { transform: none; }
+        .alz-timeline-tick:last-child { transform: translateX(-100%); }
+        .alz-timeline-track { position: relative; height: 54px; }
+        .alz-timeline-grid { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #e5e7eb; pointer-events: none; }
+        .alz-timeline-segment { position: absolute; top: 17px; height: 20px; min-width: 1px; border: 0; padding: 0; cursor: pointer; }
+        .alz-timeline-segment:first-of-type { border-radius: 4px 0 0 4px; }
+        .alz-timeline-segment:last-of-type { border-radius: 0 4px 4px 0; }
+        .alz-timeline-segment:hover { filter: brightness(.9); }
+        .alz-timeline-segment:focus-visible { outline: 2px solid #0f5a6b; outline-offset: 2px; z-index: 1; }
         input[type="checkbox"] { accent-color: #1D93AB; }
     </style>
 </head>
@@ -166,6 +188,8 @@
             </form>
         </section>
 
+        @include('admin.partials.channel-status-timeline')
+
         <section class="bg-white rounded-lg shadow overflow-hidden" aria-labelledby="monitor-heading">
             <div class="p-5 md:p-6 border-b space-y-4">
                 <div>
@@ -175,7 +199,7 @@
                     <p class="text-xs text-gray-500 mt-1">长内容最多显示两行；悬停查看全文，点击 + 展开并复制，再次点击收起。</p>
                 </div>
                 <form method="GET" action="{{ route('admin.channel-recovery') }}#monitor-heading" class="flex flex-wrap items-end gap-3">
-                    @foreach (['channel_id', 'result'] as $filter)
+                    @foreach (['channel_id', 'result', 'timeline_range', 'timeline_end', 'timeline_channel_id'] as $filter)
                         @if (!empty($filters[$filter]))
                             <input type="hidden" name="{{ $filter }}" value="{{ $filters[$filter] }}">
                         @endif
@@ -195,7 +219,7 @@
                     </div>
                     <button type="submit" class="alz-btn">筛选监控日志</button>
                     @if (!empty($filters['monitor_channel_id']) || !empty($filters['monitor_result']))
-                        <a href="{{ route('admin.channel-recovery', array_intersect_key($filters, array_flip(['channel_id', 'result']))) }}#monitor-heading" class="alz-link text-sm py-2">清除筛选</a>
+                        <a href="{{ route('admin.channel-recovery', array_diff_key($filters, array_flip(['monitor_channel_id', 'monitor_result']))) }}#monitor-heading" class="alz-link text-sm py-2">清除筛选</a>
                     @endif
                 </form>
             </div>
@@ -269,7 +293,7 @@
                     <p class="text-xs text-gray-500 mt-1">长内容最多显示两行；悬停查看全文，点击 + 展开并复制，再次点击收起。</p>
                 </div>
                 <form method="GET" action="{{ route('admin.channel-recovery') }}" class="flex flex-wrap items-end gap-3">
-                    @foreach (['monitor_channel_id', 'monitor_result'] as $filter)
+                    @foreach (['monitor_channel_id', 'monitor_result', 'timeline_range', 'timeline_end', 'timeline_channel_id'] as $filter)
                         @if (!empty($filters[$filter]))
                             <input type="hidden" name="{{ $filter }}" value="{{ $filters[$filter] }}">
                         @endif
@@ -289,7 +313,7 @@
                     </div>
                     <button type="submit" class="alz-btn">筛选日志</button>
                     @if (!empty($filters['channel_id']) || !empty($filters['result']))
-                        <a href="{{ route('admin.channel-recovery', array_intersect_key($filters, array_flip(['monitor_channel_id', 'monitor_result']))) }}#logs-heading" class="alz-link text-sm py-2">清除筛选</a>
+                        <a href="{{ route('admin.channel-recovery', array_diff_key($filters, array_flip(['channel_id', 'result']))) }}#logs-heading" class="alz-link text-sm py-2">清除筛选</a>
                     @endif
                 </form>
             </div>
@@ -345,5 +369,15 @@
             @endif
         </section>
     </main>
+<script>
+    document.getElementById('timeline-range').addEventListener('change', function () {
+        this.form.requestSubmit();
+    });
+    document.querySelectorAll('.alz-timeline-segment').forEach(function (segment) {
+        segment.addEventListener('click', function () {
+            document.getElementById('timeline-detail').textContent = this.title;
+        });
+    });
+</script>
 </body>
 </html>

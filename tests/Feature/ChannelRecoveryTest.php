@@ -6,6 +6,7 @@ use App\Models\ChannelMonitorLog;
 use App\Models\ChannelRecoveryLog;
 use App\Models\ChannelRecoveryRun;
 use App\Models\ChannelRecoverySetting;
+use App\Models\ChannelStatusSample;
 use App\Services\ChannelRecoveryChecker;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Database\Schema\Blueprint;
@@ -53,6 +54,7 @@ class ChannelRecoveryTest extends TestCase
         DB::setDefaultConnection('channel_recovery_test');
         Schema::connection('channel_recovery_test')->create('channels', function (Blueprint $table) {
             $table->unsignedInteger('id')->primary();
+            $table->string('name')->nullable();
             $table->integer('status');
             $table->integer('auto_ban')->nullable();
         });
@@ -133,6 +135,7 @@ class ChannelRecoveryTest extends TestCase
         $this->assertSame(1, $monitor->channel_id);
         $this->assertSame('healthy', $monitor->result);
         $this->assertFalse($monitor->dry_run);
+        $this->assertSame([1, 2, 3], ChannelStatusSample::orderBy('channel_id')->pluck('channel_id')->all());
     }
 
     public function test_disabled_feature_does_not_query_database_or_send_requests(): void
@@ -144,6 +147,7 @@ class ChannelRecoveryTest extends TestCase
         $this->artisan('channels:recover')->expectsOutput('渠道自动恢复未开启，请在管理员渠道恢复设置中开启。')->assertExitCode(0);
 
         $this->assertSame([], DB::getQueryLog());
+        $this->assertSame(0, ChannelStatusSample::count());
         Http::assertNothingSent();
     }
 
@@ -710,6 +714,18 @@ class ChannelRecoveryTest extends TestCase
 
         $this->assertSame(1, $stats['recovered']);
         $this->assertSame(1, $this->apiChannels[1]['status']);
+    }
+
+    public function test_timeline_sample_failure_is_visible_and_does_not_block_recovery(): void
+    {
+        $this->seedChannel(1);
+        Schema::connection('alerts')->drop('channel_status_samples');
+
+        $stats = app(ChannelRecoveryChecker::class)->run();
+
+        $this->assertSame(1, $stats['recovered']);
+        $this->assertSame('recovered', ChannelRecoveryLog::sole()->result);
+        $this->assertStringContainsString('渠道状态时间轴采集失败', ChannelRecoveryRun::current()->error);
     }
 
     private function seedChannel(int $id, int $status = 3, ?int $autoBan = 1): void

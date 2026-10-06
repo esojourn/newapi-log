@@ -52,6 +52,13 @@ class ChannelRecoveryChecker
             $this->client->configure($settings->configuration());
             $this->client->validateConfiguration();
 
+            try {
+                app(ChannelStatusTimeline::class)->capture($settings, $onlyChannelId);
+            } catch (Throwable $e) {
+                $runError = '渠道状态时间轴采集失败，请检查 channels 表的只读权限及本地 alerts 迁移。';
+                Log::warning('Channel status samples could not be saved', ['error' => get_class($e)]);
+            }
+
             // 只读 id，不读取渠道密钥；按 id 分批，恢复导致结果集缩小时也不会漏渠道。
             $channels = DB::table('channels')->select('id')
                 ->where('auto_ban', 1)
