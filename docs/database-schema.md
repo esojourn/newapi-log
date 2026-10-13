@@ -43,6 +43,7 @@
 | `created_at` | int64 | 创建时间（Unix 时间戳） |
 | `token_name` | string | Token 名称 |
 | `model_name` | string | 模型名称 |
+| `channel_id` | int | 上游渠道 ID，仅管理员可查询；名称通过 `channels.id` 对应的 `name` 获取 |
 | `prompt_tokens` | int | 输入 Token 数 |
 | `completion_tokens` | int | 输出 Token 数 |
 | `quota` | int | 本次消费配额 |

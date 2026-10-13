@@ -541,7 +541,24 @@ class StatsController extends Controller
             $modelCacheSaved[$model] = $this->quotaToAmount((int) round($quota));
         }
 
-        return view('admin.dashboard', compact(
+        // 渠道信息仅在管理员仪表盘加载；只读 ID 和名称，不读取上游密钥。
+        // 从日志取 ID，保留已删除渠道的历史统计，也不限制为用量前几名。
+        $cacheChannelIds = DB::table('logs')
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
+            ->where('channel_id', '>', 0)
+            ->distinct()
+            ->orderBy('channel_id')
+            ->pluck('channel_id');
+        $channelNames = $cacheChannelIds->isEmpty()
+            ? collect()
+            : DB::table('channels')->whereIn('id', $cacheChannelIds)->pluck('name', 'id');
+        $cacheChannels = $cacheChannelIds->map(fn ($id) => [
+            'id' => (int) $id,
+            'name' => $channelNames->get($id) ?: '已删除或未命名渠道',
+        ])->all();
+
+        return response()->view('admin.dashboard', compact(
             'days',
             'hourly',
             'range',
@@ -558,8 +575,53 @@ class StatsController extends Controller
             'dailyCacheData',
             'cacheModelNames',
             'modelCacheData',
-            'modelCacheSaved'
-        ));
+            'modelCacheSaved',
+            'cacheChannels'
+        ))->header('Cache-Control', 'private, no-store');
+    }
+
+    /**
+     * 管理员缓存趋势：渠道与模型取交集，沿用仪表盘的时间桶及缓存计费口径。
+     * 路由必须放在 admin 中间件内，用户侧不得调用或复用此接口。
+     */
+    public function cacheTrend(Request $request)
+    {
+        $filters = $request->validate([
+            'channel_id' => 'nullable|integer|min:1',
+            'model' => 'nullable|string|max:255',
+        ]);
+        [, , $sinceTimestamp, $untilTimestamp, $bucketExpr, $dates] = $this->resolveRange($request);
+
+        $query = DB::table('logs')
+            ->where('created_at', '>=', $sinceTimestamp)
+            ->where('created_at', '<', $untilTimestamp)
+            ->when(isset($filters['channel_id']), fn ($query) => $query->where('channel_id', $filters['channel_id']))
+            ->when(isset($filters['model']), fn ($query) => $query->where('model_name', $filters['model']))
+            ->groupBy('date')
+            ->selectRaw("{$bucketExpr} as date")
+            ->selectRaw('COUNT(*) as request_count')
+            ->selectRaw("COALESCE(SUM({$this->cacheSavedQuotaExpr()}), 0) as daily_cache_saved_quota")
+            ->orderBy('date');
+
+        $data = $this->emptyCacheSeries($dates);
+        $data['request_count'] = array_fill_keys($dates, 0);
+        $savedQuota = 0.0;
+        foreach ($this->selectDailyCache($query)->get() as $row) {
+            if (!isset($data['cache_tokens'][$row->date])) {
+                continue;
+            }
+            $data['cache_tokens'][$row->date] = (int) $row->daily_cache_tokens;
+            $data['cache_creation_tokens'][$row->date] = (int) $row->daily_cache_creation_tokens;
+            $data['uncached_prompt_tokens'][$row->date] = (int) $row->daily_uncached_prompt_tokens;
+            $data['request_count'][$row->date] = (int) $row->request_count;
+            $savedQuota += (float) $row->daily_cache_saved_quota;
+        }
+
+        return response()->json([
+            'dates' => $dates,
+            'data' => $data,
+            'saved_amount' => $this->quotaToAmount((int) round($savedQuota)),
+        ])->header('Cache-Control', 'private, no-store');
     }
 
     /**

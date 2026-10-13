@@ -45,6 +45,7 @@ Route::post('/admin/logout', [AdminController::class, 'logout'])->name('admin.lo
 
 Route::middleware('admin')->group(function () {
     Route::get('/admin', [StatsController::class, 'dashboard'])->name('admin.dashboard');
+    Route::get('/admin/cache-trend', [StatsController::class, 'cacheTrend'])->name('admin.cache-trend');
     Route::get('/admin/channel-recovery', [ChannelRecoveryController::class, 'index'])->name('admin.channel-recovery');
     Route::post('/admin/channel-recovery', [ChannelRecoveryController::class, 'save'])
         ->middleware('throttle:20,1')->name('admin.channel-recovery.save');

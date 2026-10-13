@@ -134,10 +134,20 @@
         {{-- 缓存利用率趋势 --}}
         <div class="bg-white rounded-lg shadow p-5">
             <h2 class="text-lg font-semibold text-gray-800 mb-1">缓存利用率趋势</h2>
+            <div class="flex flex-wrap items-center gap-2 my-3">
+                <label for="cacheChannelFilter" class="text-sm text-gray-700">上游渠道</label>
+                <select id="cacheChannelFilter" class="max-w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md bg-white text-gray-700">
+                    <option value="">全部渠道</option>
+                    @foreach ($cacheChannels as $channel)
+                        <option value="{{ $channel['id'] }}">{{ $channel['name'] }}（#{{ $channel['id'] }}）</option>
+                    @endforeach
+                </select>
+                <span id="cacheFilterStatus" class="text-xs text-gray-500" role="status" aria-live="polite"></span>
+            </div>
             <p class="text-xs text-gray-400 mb-4">
                 输入 Tokens 按缓存状态拆分（三段之和 = {{ $hourly ? '该时段' : '当日' }}总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
-                请求数折线随模型筛选切换，全部模型显示汇总请求数。
-                <span id="cacheScopeLabel">全部模型</span> 区间内预估节省
+                渠道与模型筛选共同作用于本图的 Tokens、命中率、请求数和预估节省。
+                <span id="cacheScopeLabel">全部渠道 · 全部模型</span> 区间内预估节省
                 <span id="cacheSavedAmount" class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
             </p>
             <div class="relative" style="height: 300px;">
@@ -451,17 +461,24 @@
             }
         });
 
-        // 模型筛选：空值代表全部模型，切换时只换数据不重建图表
+        // 渠道数据只从受管理员认证保护的接口加载，模型与渠道取交集。
         const fmtAmount = v => v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
         const cacheScopeLabel = document.getElementById('cacheScopeLabel');
         const cacheSavedAmount = document.getElementById('cacheSavedAmount');
         const cacheModelBtns = document.querySelectorAll('.cache-model-btn');
+        const cacheChannelFilter = document.getElementById('cacheChannelFilter');
+        const cacheFilterStatus = document.getElementById('cacheFilterStatus');
+        const cacheCanvas = document.getElementById('cacheChart');
+        const cacheTrendUrl = @json(route('admin.cache-trend'));
+        // 固定为页面当前窗口，跨整点操作也不改变时间桶。
+        const cacheRange = { days: @json($days), at: @json($range['value']) };
+        let selectedCacheModel = '';
+        let appliedCacheChannel = '';
+        let appliedCacheModel = '';
+        let cacheRequestVersion = 0;
+        let cacheRequestController = null;
 
-        cacheModelBtns.forEach(btn => btn.addEventListener('click', () => {
-            const model = btn.dataset.model;
-            const source = model ? modelCacheData[model] : cacheData;
-            if (!source) return;
-
+        function applyCacheFilter(source, savedAmount, channel, model) {
             const series = cacheSeries(source);
             cacheChart.data.datasets[0].data = series.read;
             cacheChart.data.datasets[1].data = series.write;
@@ -470,17 +487,81 @@
             cacheChart.data.datasets[4].data = series.requests;
             cacheChart.update();
 
-            cacheScopeLabel.textContent = model || '全部模型';
-            cacheSavedAmount.textContent = '$' + fmtAmount(model ? modelCacheSaved[model] : allCacheSaved);
+            const channelLabel = channel ? cacheChannelFilter.selectedOptions[0].textContent : '全部渠道';
+            cacheScopeLabel.textContent = `${channelLabel} · ${model || '全部模型'}`;
+            cacheSavedAmount.textContent = '$' + fmtAmount(savedAmount);
+            appliedCacheChannel = channel;
+            appliedCacheModel = model;
+        }
 
+        function updateCacheModelButtons() {
             cacheModelBtns.forEach(other => {
-                const active = other === btn;
+                const active = other.dataset.model === selectedCacheModel;
                 other.classList.toggle('alz-btn-active', active);
                 other.classList.toggle('bg-white', !active);
                 other.classList.toggle('text-gray-700', !active);
                 other.classList.toggle('border-gray-300', !active);
                 other.classList.toggle('alz-btn-day', !active);
             });
+        }
+
+        async function loadCacheFilter() {
+            const channel = cacheChannelFilter.value;
+            const model = selectedCacheModel;
+            const version = ++cacheRequestVersion;
+            cacheRequestController?.abort();
+            cacheFilterStatus.textContent = '';
+            cacheCanvas.style.opacity = '1';
+            cacheCanvas.setAttribute('aria-busy', 'false');
+
+            if (!channel) {
+                applyCacheFilter(model ? modelCacheData[model] : cacheData,
+                    model ? modelCacheSaved[model] : allCacheSaved, channel, model);
+                return;
+            }
+
+            cacheRequestController = new AbortController();
+            const url = new URL(cacheTrendUrl);
+            url.search = new URLSearchParams({ ...cacheRange, channel_id: channel, model }).toString();
+            cacheFilterStatus.textContent = '正在加载…';
+            cacheCanvas.style.opacity = '0.5';
+            cacheCanvas.setAttribute('aria-busy', 'true');
+
+            try {
+                const response = await fetch(url, {
+                    headers: { 'Accept': 'application/json' },
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    signal: cacheRequestController.signal,
+                });
+                if (!response.ok || response.redirected) throw new Error('加载失败');
+                const result = await response.json();
+                if (version !== cacheRequestVersion) return;
+                applyCacheFilter(result.data, result.saved_amount, channel, model);
+                cacheFilterStatus.textContent = seriesHasRequests(result.data) ? '' : '当前筛选暂无数据';
+            } catch (error) {
+                if (version !== cacheRequestVersion) return;
+                cacheChannelFilter.value = appliedCacheChannel;
+                selectedCacheModel = appliedCacheModel;
+                updateCacheModelButtons();
+                cacheFilterStatus.textContent = '加载失败，已保留原筛选；请重试或重新登录。';
+            } finally {
+                if (version === cacheRequestVersion) {
+                    cacheCanvas.style.opacity = '1';
+                    cacheCanvas.setAttribute('aria-busy', 'false');
+                }
+            }
+        }
+
+        function seriesHasRequests(source) {
+            return Object.values(source.request_count).some(count => count > 0);
+        }
+
+        cacheChannelFilter.addEventListener('change', loadCacheFilter);
+        cacheModelBtns.forEach(btn => btn.addEventListener('click', () => {
+            selectedCacheModel = btn.dataset.model;
+            updateCacheModelButtons();
+            loadCacheFilter();
         }));
     </script>
 </body>
