@@ -264,6 +264,33 @@ class StatsController extends Controller
     }
 
     /**
+     * 管理员缓存图表额外展示同一筛选范围的请求数、金额和总 Tokens。
+     */
+    private function emptyAdminCacheSeries(array $dates): array
+    {
+        return array_merge($this->emptyCacheSeries($dates), [
+            'request_count' => array_fill_keys($dates, 0),
+            'amounts' => array_fill_keys($dates, 0),
+            'total_tokens' => array_fill_keys($dates, 0),
+        ]);
+    }
+
+    private function fillAdminCacheSeries(array &$data, $row): void
+    {
+        $date = $row->date;
+        $data['cache_tokens'][$date] = (int) $row->daily_cache_tokens;
+        $data['cache_creation_tokens'][$date] = (int) $row->daily_cache_creation_tokens;
+        $data['uncached_prompt_tokens'][$date] = (int) $row->daily_uncached_prompt_tokens;
+        $data['request_count'][$date] = (int) $row->request_count;
+        $data['amounts'][$date] = $this->quotaToAmount((int) $row->daily_quota);
+        // 复用三段输入之和，避免再次计算缓存表达式；总量包含输出 Tokens。
+        $data['total_tokens'][$date] = $data['cache_tokens'][$date]
+            + $data['cache_creation_tokens'][$date]
+            + $data['uncached_prompt_tokens'][$date]
+            + (int) $row->daily_completion_tokens;
+    }
+
+    /**
      * 基准时间（窗口右端）的查询参数名。缺省是「现在」，即跟随最新数据。
      */
     private const ANCHOR_PARAM = 'at';
@@ -459,6 +486,7 @@ class StatsController extends Controller
             ->groupBy('date', 'model_name')
             ->selectRaw("{$bucketExpr} as date, model_name")
             ->selectRaw('COUNT(*) as request_count')
+            ->selectRaw('SUM(quota) as daily_quota, SUM(completion_tokens) as daily_completion_tokens')
             ->selectRaw("COALESCE(SUM({$this->cacheSavedQuotaExpr()}), 0) as daily_cache_saved_quota")
             ->orderBy('date');
 
@@ -481,6 +509,7 @@ class StatsController extends Controller
             ->groupBy('date')
             ->selectRaw("{$bucketExpr} as date, SUM(quota) as daily_quota")
             ->selectRaw('COUNT(*) as request_count')
+            ->selectRaw('SUM(completion_tokens) as daily_completion_tokens')
             ->orderBy('date');
 
         $dailyAmounts = $this->selectDailyCache($dailyAmountsQuery)
@@ -501,38 +530,30 @@ class StatsController extends Controller
             }
         }
 
-        // 全站每日金额、缓存与请求数趋势，无日志的时段补零
+        // 全站每日金额、总 Tokens、缓存与请求数趋势，无日志的时段补零
         $dailyTotalAmountData = array_fill_keys($dates, 0);
-        $dailyCacheData = $this->emptyCacheSeries($dates);
-        $dailyCacheData['request_count'] = array_fill_keys($dates, 0);
+        $dailyCacheData = $this->emptyAdminCacheSeries($dates);
         foreach ($dates as $date) {
             $row = $dailyAmounts->get($date);
             if (!$row) {
                 continue;
             }
-            $dailyTotalAmountData[$date] = $this->quotaToAmount((int) $row->daily_quota);
-            $dailyCacheData['cache_tokens'][$date] = (int) $row->daily_cache_tokens;
-            $dailyCacheData['cache_creation_tokens'][$date] = (int) $row->daily_cache_creation_tokens;
-            $dailyCacheData['uncached_prompt_tokens'][$date] = (int) $row->daily_uncached_prompt_tokens;
-            $dailyCacheData['request_count'][$date] = (int) $row->request_count;
+            $this->fillAdminCacheSeries($dailyCacheData, $row);
+            $dailyTotalAmountData[$date] = $dailyCacheData['amounts'][$date];
         }
 
         // 逐模型的每日缓存趋势（供缓存图表的模型筛选按钮切换）
         $modelCacheData = [];
         $modelCacheSavedQuota = [];
         foreach ($cacheModelNames as $model) {
-            $modelCacheData[$model] = $this->emptyCacheSeries($dates);
-            $modelCacheData[$model]['request_count'] = array_fill_keys($dates, 0);
+            $modelCacheData[$model] = $this->emptyAdminCacheSeries($dates);
             $modelCacheSavedQuota[$model] = 0.0;
         }
         foreach ($modelCacheTrend as $row) {
             if (!isset($modelCacheData[$row->model_name]['cache_tokens'][$row->date])) {
                 continue;
             }
-            $modelCacheData[$row->model_name]['cache_tokens'][$row->date] = (int) $row->daily_cache_tokens;
-            $modelCacheData[$row->model_name]['cache_creation_tokens'][$row->date] = (int) $row->daily_cache_creation_tokens;
-            $modelCacheData[$row->model_name]['uncached_prompt_tokens'][$row->date] = (int) $row->daily_uncached_prompt_tokens;
-            $modelCacheData[$row->model_name]['request_count'][$row->date] = (int) $row->request_count;
+            $this->fillAdminCacheSeries($modelCacheData[$row->model_name], $row);
             $modelCacheSavedQuota[$row->model_name] += (float) $row->daily_cache_saved_quota;
         }
 
@@ -600,20 +621,17 @@ class StatsController extends Controller
             ->groupBy('date')
             ->selectRaw("{$bucketExpr} as date")
             ->selectRaw('COUNT(*) as request_count')
+            ->selectRaw('SUM(quota) as daily_quota, SUM(completion_tokens) as daily_completion_tokens')
             ->selectRaw("COALESCE(SUM({$this->cacheSavedQuotaExpr()}), 0) as daily_cache_saved_quota")
             ->orderBy('date');
 
-        $data = $this->emptyCacheSeries($dates);
-        $data['request_count'] = array_fill_keys($dates, 0);
+        $data = $this->emptyAdminCacheSeries($dates);
         $savedQuota = 0.0;
         foreach ($this->selectDailyCache($query)->get() as $row) {
             if (!isset($data['cache_tokens'][$row->date])) {
                 continue;
             }
-            $data['cache_tokens'][$row->date] = (int) $row->daily_cache_tokens;
-            $data['cache_creation_tokens'][$row->date] = (int) $row->daily_cache_creation_tokens;
-            $data['uncached_prompt_tokens'][$row->date] = (int) $row->daily_uncached_prompt_tokens;
-            $data['request_count'][$row->date] = (int) $row->request_count;
+            $this->fillAdminCacheSeries($data, $row);
             $savedQuota += (float) $row->daily_cache_saved_quota;
         }
 

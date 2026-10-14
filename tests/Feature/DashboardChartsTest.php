@@ -125,12 +125,28 @@ class DashboardChartsTest extends TestCase
         $expectedAmounts[$previous->format($format)] = 66.0;
         $expectedAmounts[$end->format($format)] = 0.75;
         $this->assertSame($expectedAmounts, $response->viewData('dailyTotalAmountData'));
+        $this->assertSame($expectedAmounts, $response->viewData('dailyCacheData')['amounts']);
+
+        $expectedTokens = array_fill_keys($dates, 0);
+        $expectedTokens[$since->format($format)] = 110;
+        $expectedTokens[$previous->format($format)] = 6710;
+        $expectedTokens[$end->format($format)] = 330;
+        $this->assertSame($expectedTokens, $response->viewData('dailyCacheData')['total_tokens']);
+        $this->assertSame(array_sum($expectedTokens), $response->viewData('overview')->total_tokens);
 
         $models = $response->viewData('modelCacheData');
         $expectedModelCounts = array_fill_keys($dates, 0);
         $expectedModelCounts[$previous->format($format)] = 2;
         $expectedModelCounts[$end->format($format)] = 3;
         $this->assertSame($expectedModelCounts, $models['model-0']['request_count']);
+        $expectedModelAmounts = array_fill_keys($dates, 0);
+        $expectedModelAmounts[$previous->format($format)] = 16.0;
+        $expectedModelAmounts[$end->format($format)] = 0.75;
+        $this->assertSame($expectedModelAmounts, $models['model-0']['amounts']);
+        $expectedModelTokens = array_fill_keys($dates, 0);
+        $expectedModelTokens[$previous->format($format)] = 1620;
+        $expectedModelTokens[$end->format($format)] = 330;
+        $this->assertSame($expectedModelTokens, $models['model-0']['total_tokens']);
         $this->assertSame(15, array_sum($expectedCounts));
         $this->assertSame(14, array_sum(array_map(fn ($series) => array_sum($series['request_count']), $models)));
     }
@@ -144,7 +160,9 @@ class DashboardChartsTest extends TestCase
         $dates = $response->viewData('dates');
         $this->assertCount(24, $dates);
         $this->assertSame(array_fill_keys($dates, 0), $response->viewData('dailyTotalAmountData'));
-        $this->assertSame(array_fill_keys($dates, 0), $response->viewData('dailyCacheData')['request_count']);
+        foreach ($response->viewData('dailyCacheData') as $series) {
+            $this->assertSame(array_fill_keys($dates, 0), $series);
+        }
         $this->assertSame([], $response->viewData('modelCacheData'));
         $this->assertSame([], $response->viewData('cacheChannels'));
     }
@@ -189,16 +207,16 @@ class DashboardChartsTest extends TestCase
         $since = $days === 1 ? $end->copy()->subHours(23) : $end->copy()->subDays($days);
         $until = $days === 1 ? $end->copy()->addHour() : $end->copy()->addDay();
 
-        $this->insertLog($since, 'user-1', 'model-0', 500000, 100, 7, [
+        $this->insertLog($since, 'user-1', 'model-0', 62500, 100, 7, [
             'cache_tokens' => 20000, 'cache_creation_tokens' => 1000, 'cache_ratio' => 0.1, 'model_ratio' => 1,
             'usage_semantic' => 'anthropic',
         ]);
-        $this->insertLog($end, 'user-2', 'model-0', 500000, 50000, 7, [
+        $this->insertLog($end, 'user-2', 'model-0', 375000, 50000, 7, [
             'cache_tokens' => 40000, 'cache_creation_tokens' => 1000, 'cache_write_tokens' => 1500,
             'cache_ratio' => 0.1, 'model_ratio' => 1, 'usage_semantic' => 'openai',
         ]);
-        $this->insertLog($end, 'user-1', 'model-5', 500000, 100, 7);
-        $this->insertLog($end, 'other-channel', 'model-0', 500000, 100, 8);
+        $this->insertLog($end, 'user-1', 'model-5', 1000000, 100, 7);
+        $this->insertLog($end, 'other-channel', 'model-0', 2000000, 100, 8);
         $this->insertLog($since->copy()->subSecond(), 'outside', 'model-0', 500000, 100, 7);
         $this->insertLog($until, 'outside', 'model-0', 500000, 100, 7);
 
@@ -211,6 +229,14 @@ class DashboardChartsTest extends TestCase
         $expectedCounts[$since->format($format)] = 1;
         $expectedCounts[$end->format($format)] = 1;
         $this->assertSame($expectedCounts, $combined->json('data.request_count'));
+        $expectedAmounts = array_fill_keys($dates, 0);
+        $expectedAmounts[$since->format($format)] = 0.125;
+        $expectedAmounts[$end->format($format)] = 0.75;
+        $this->assertSame($expectedAmounts, $combined->json('data.amounts'));
+        $expectedTokens = array_fill_keys($dates, 0);
+        $expectedTokens[$since->format($format)] = 21110;
+        $expectedTokens[$end->format($format)] = 50510;
+        $this->assertSame($expectedTokens, $combined->json('data.total_tokens'));
         $this->assertSame(60000, array_sum($combined->json('data.cache_tokens')));
         $this->assertSame(2500, array_sum($combined->json('data.cache_creation_tokens')));
         $this->assertSame(9100, array_sum($combined->json('data.uncached_prompt_tokens')));
@@ -219,11 +245,17 @@ class DashboardChartsTest extends TestCase
 
         $channelOnly = $this->getJson($baseUrl . '&channel_id=7')->assertOk();
         $this->assertSame(3, array_sum($channelOnly->json('data.request_count')));
+        $this->assertSame(2.875, array_sum($channelOnly->json('data.amounts')));
+        $this->assertSame(71730, array_sum($channelOnly->json('data.total_tokens')));
         $this->assertSame(0.108, $channelOnly->json('saved_amount'));
         $modelOnly = $this->getJson($baseUrl . '&model=model-0')->assertOk();
         $this->assertSame(3, array_sum($modelOnly->json('data.request_count')));
+        $this->assertSame(4.875, array_sum($modelOnly->json('data.amounts')));
+        $this->assertSame(71730, array_sum($modelOnly->json('data.total_tokens')));
         $all = $this->getJson($baseUrl)->assertOk();
         $this->assertSame(4, array_sum($all->json('data.request_count')));
+        $this->assertSame(6.875, array_sum($all->json('data.amounts')));
+        $this->assertSame(71840, array_sum($all->json('data.total_tokens')));
         $dashboard = $this->get('/admin?days=' . $days . '&at=2026-09-10T12:00')->assertOk();
         $this->assertSame($dashboard->viewData('dailyCacheData'), $all->json('data'));
         $this->assertSame($dashboard->viewData('overview')->cache_saved_amount, $all->json('saved_amount'));

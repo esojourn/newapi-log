@@ -146,12 +146,14 @@
             </div>
             <p class="text-xs text-gray-400 mb-4">
                 输入 Tokens 按缓存状态拆分（三段之和 = {{ $hourly ? '该时段' : '当日' }}总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
-                渠道与模型筛选共同作用于本图的 Tokens、命中率、请求数和预估节省。
+                虚线显示请求数、实际消费金额和总 Tokens（输入含缓存 + 输出）。渠道与模型筛选共同作用于本图的所有数据。
                 <span id="cacheScopeLabel">全部渠道 · 全部模型</span> 区间内预估节省
                 <span id="cacheSavedAmount" class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
             </p>
-            <div class="relative" style="height: 300px;">
-                <canvas id="cacheChart"></canvas>
+            <div class="overflow-x-auto">
+                <div class="relative" style="height: 300px; min-width: 640px;">
+                    <canvas id="cacheChart"></canvas>
+                </div>
             </div>
 
             {{-- 模型筛选（用量前 5 的模型） --}}
@@ -351,15 +353,16 @@
             }
         });
 
-        // 缓存利用率趋势：输入 Tokens 按缓存状态堆叠 + 命中率和请求数折线
+        // 缓存利用率趋势：输入 Tokens 按缓存状态堆叠 + 命中率、请求数、金额和总 Tokens 折线
         const cacheData = @json($dailyCacheData);
         const fmtTokens = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v;
+        const fmtAmount = v => v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 
         const modelCacheData = @json($modelCacheData);
         const modelCacheSaved = @json($modelCacheSaved);
         const allCacheSaved = {{ $overview->cache_saved_amount }};
 
-        // 从同一模型范围的序列里拆出三段柱子、命中率与请求数折线
+        // 所有柱子和折线都使用相同的渠道、模型与时间范围
         // 命中率 = 缓存读取 / 当日总输入；当日无输入时留空（折线断开）
         function cacheSeries(source) {
             const read = Object.values(source.cache_tokens);
@@ -370,7 +373,9 @@
                 return total > 0 ? +(r / total * 100).toFixed(1) : null;
             });
             const requests = dates.map(date => source.request_count[date] ?? 0);
-            return { read, write, miss, rate, requests };
+            const amounts = dates.map(date => source.amounts[date] ?? 0);
+            const totalTokens = dates.map(date => source.total_tokens[date] ?? 0);
+            return { read, write, miss, rate, requests, amounts, totalTokens };
         }
 
         const initialCache = cacheSeries(cacheData);
@@ -412,6 +417,33 @@
                         yAxisID: 'y2',
                         order: 0,
                         pointRadius: 2,
+                    },
+                    {
+                        label: '总金额 ($)',
+                        data: initialCache.amounts,
+                        type: 'line',
+                        borderColor: '#EA580C',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        borderDash: [5, 3],
+                        tension: 0.3,
+                        yAxisID: 'y3',
+                        order: 0,
+                        pointRadius: 2,
+                    },
+                    {
+                        label: '总 Tokens',
+                        data: initialCache.totalTokens,
+                        type: 'line',
+                        borderColor: '#10B981',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        borderDash: [5, 3],
+                        tension: 0.3,
+                        stack: 'totalTokens',
+                        yAxisID: 'y',
+                        order: 0,
+                        pointRadius: 2,
                     }
                 ]
             },
@@ -427,6 +459,8 @@
                                 ? `${ctx.dataset.label}: ${ctx.raw === null ? '-' : ctx.raw + '%'}`
                                 : ctx.dataset.yAxisID === 'y2'
                                 ? `${ctx.dataset.label}: ${ctx.raw.toLocaleString()} 次`
+                                : ctx.dataset.yAxisID === 'y3'
+                                ? `${ctx.dataset.label}: $${fmtAmount(ctx.raw)}`
                                 : `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}`
                         }
                     }
@@ -437,7 +471,8 @@
                         type: 'linear',
                         position: 'left',
                         stacked: true,
-                        title: { display: true, text: '输入 Tokens' },
+                        beginAtZero: true,
+                        title: { display: true, text: 'Tokens' },
                         ticks: { callback: fmtTokens }
                     },
                     y1: {
@@ -456,13 +491,20 @@
                         title: { display: true, text: '请求数', color: '#E11D48' },
                         grid: { drawOnChartArea: false },
                         ticks: { precision: 0, color: '#E11D48', callback: v => v.toLocaleString() }
+                    },
+                    y3: {
+                        type: 'linear',
+                        position: 'right',
+                        beginAtZero: true,
+                        title: { display: true, text: '金额 ($)', color: '#EA580C' },
+                        grid: { drawOnChartArea: false },
+                        ticks: { color: '#EA580C', callback: v => '$' + v.toFixed(2) }
                     }
                 }
             }
         });
 
         // 渠道数据只从受管理员认证保护的接口加载，模型与渠道取交集。
-        const fmtAmount = v => v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
         const cacheScopeLabel = document.getElementById('cacheScopeLabel');
         const cacheSavedAmount = document.getElementById('cacheSavedAmount');
         const cacheModelBtns = document.querySelectorAll('.cache-model-btn');
@@ -485,6 +527,8 @@
             cacheChart.data.datasets[2].data = series.miss;
             cacheChart.data.datasets[3].data = series.rate;
             cacheChart.data.datasets[4].data = series.requests;
+            cacheChart.data.datasets[5].data = series.amounts;
+            cacheChart.data.datasets[6].data = series.totalTokens;
             cacheChart.update();
 
             const channelLabel = channel ? cacheChannelFilter.selectedOptions[0].textContent : '全部渠道';
