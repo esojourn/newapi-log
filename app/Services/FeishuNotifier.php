@@ -171,6 +171,43 @@ class FeishuNotifier
         return self::card('⚠️ 余额预警汇总（管理员）', 'red', $elements);
     }
 
+    /**
+     * @param  array<int, array{name: string, spent: int, threshold: int}>  $rows
+     */
+    public function adminHourlySummaryCard(array $rows, Carbon $start, Carbon $end): array
+    {
+        $lines = [];
+        foreach ($rows as $row) {
+            $lines[] = sprintf(
+                '**%s** — 消费 <font color=\'red\'>%s</font> / 限额 %s',
+                self::plain($row['name']),
+                Quota::format($row['spent']),
+                Quota::format($row['threshold'])
+            );
+        }
+
+        // 保留「余额预警」关键词，复用现有机器人的安全设置。
+        return self::card('⚠️ 余额预警 · 每小时超限', 'red', [
+            [
+                'tag' => 'div',
+                'text' => [
+                    'tag' => 'lark_md',
+                    'content' => '统计时段：' . $start->format('Y-m-d H:i') . ' 至 ' . $end->format('Y-m-d H:i')
+                        . '（' . $start->timezoneName . "）\n\n以下 " . count($rows)
+                        . " 个 Key 前一小时消费已超过限额：\n\n" . implode("\n", $lines),
+                ],
+            ],
+            ['tag' => 'hr'],
+            [
+                'tag' => 'note',
+                'elements' => [[
+                    'tag' => 'plain_text',
+                    'content' => '检查时间 ' . Carbon::now()->format('Y-m-d H:i') . '；同一小时每个 Key 成功发送后不重复提醒。',
+                ]],
+            ],
+        ]);
+    }
+
     /** 设置页「发送测试消息」用的卡片 */
     public function testCard(string $scene): array
     {

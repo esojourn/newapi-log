@@ -41,6 +41,8 @@
 |------|------|------|
 | `id` | int | 日志 ID |
 | `created_at` | int64 | 创建时间（Unix 时间戳） |
+| `type` | int | 日志类型；`2` 为消费日志，小时超限预警只统计此类型 |
+| `token_id` | int | 对应 `tokens.id`；小时超限预警以此关联 Key，改名不影响统计 |
 | `token_name` | string | Token 名称 |
 | `model_name` | string | 模型名称 |
 | `channel_id` | int | 上游渠道 ID，仅管理员可查询；名称通过 `channels.id` 对应的 `name` 获取 |

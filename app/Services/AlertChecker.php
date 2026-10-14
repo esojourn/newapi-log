@@ -8,13 +8,15 @@ use App\Models\AlertSubscription;
 use App\Models\Token;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 /**
- * 余额预警的检查与推送。
+ * 余额预警及管理员每小时消费超限预警的检查与推送。
  *
  * 由 alerts:check 命令（cron）驱动，也被后台的「立即检查」按钮直接调用。
- * 读外部 newapi 库只做一次 whereIn 批量查询，写只写本地 alerts 库。
+ * 批量读取外部 newapi 库的 Key 与消费日志，写只写本地 alerts 库。
  */
 class AlertChecker
 {
@@ -37,11 +39,14 @@ class AlertChecker
      *
      * @param  bool      $dryRun       只判定不发送，也不写去重记录
      * @param  int|null  $onlyTokenId  只检查某个 token_id，用于排障
-     * @return array{checked: int, user_sent: int, admin_sent: int, skipped: int, failed: int}
+     * @return array{checked: int, user_sent: int, admin_sent: int, admin_hourly_sent: int, skipped: int, failed: int}
      */
     public function run(bool $dryRun = false, ?int $onlyTokenId = null): array
     {
-        $stats = ['checked' => 0, 'user_sent' => 0, 'admin_sent' => 0, 'skipped' => 0, 'failed' => 0];
+        $stats = ['checked' => 0, 'user_sent' => 0, 'admin_sent' => 0, 'admin_hourly_sent' => 0, 'skipped' => 0, 'failed' => 0];
+
+        // 整轮检查共用同一个小时边界，即使余额推送耗时跨过整点也不会改变统计时段。
+        $hourEnd = Carbon::now()->startOfHour();
 
         $subscriptions = AlertSubscription::query()
             ->where('enabled', true)
@@ -73,6 +78,7 @@ class AlertChecker
 
         $this->runUserSide($subscriptions, $tokens, $dryRun, $stats);
         $this->runAdminSide($watches, $tokens, $adminUrl, $dryRun, $stats);
+        $this->runAdminHourlySide($watches, $tokens, $adminUrl, $hourEnd, $dryRun, $stats);
 
         return $stats;
     }
@@ -93,6 +99,21 @@ class AlertChecker
             ->whereNull('deleted_at')
             ->get(['id', 'name', 'remain_quota', 'unlimited_quota'])
             ->keyBy('id');
+    }
+
+    /** 上一完整自然小时的消费：按稳定的 token_id 聚合，Key 改名不影响金额。 */
+    protected function loadHourlyUsage(array $tokenIds, Carbon $start, Carbon $end): Collection
+    {
+        return DB::table('logs')
+            ->whereIn('token_id', $tokenIds)
+            ->where('type', 2)
+            ->where('created_at', '>=', $start->timestamp)
+            ->where('created_at', '<', $end->timestamp)
+            ->groupBy('token_id')
+            ->select('token_id')
+            ->selectRaw('COALESCE(SUM(quota), 0) as total_quota')
+            ->pluck('total_quota', 'token_id')
+            ->map(fn ($quota) => (int) $quota);
     }
 
     /** 用户侧：每个订阅推到各自的 webhook */
@@ -221,6 +242,128 @@ class AlertChecker
                 'error' => $result['error'],
             ]);
         }
+    }
+
+    /** 每小时超限独立于剩余余额、余额复发间隔和无限额度标记。 */
+    private function runAdminHourlySide(Collection $watches, Collection $tokens, ?string $adminUrl, Carbon $hourEnd, bool $dryRun, array &$stats): void
+    {
+        $hourStart = $hourEnd->copy()->subHour();
+        $pending = new Collection();
+
+        foreach ($watches as $watch) {
+            if (!$watch->hourly_alert_enabled) {
+                continue;
+            }
+
+            $stats['checked']++;
+
+            if ($watch->hourly_threshold_quota === null || $watch->last_hourly_notified_hour === $hourStart->timestamp) {
+                $stats['skipped']++;
+                continue;
+            }
+
+            if (!$tokens->has($watch->token_id)) {
+                $stats['skipped']++;
+                if (!$dryRun) {
+                    $this->markHourlyFailed($watch, 'Token 已不存在或已被删除');
+                }
+                continue;
+            }
+
+            $pending->push($watch);
+        }
+
+        if ($pending->isEmpty()) {
+            return;
+        }
+
+        try {
+            $usage = $this->loadHourlyUsage($pending->pluck('token_id')->all(), $hourStart, $hourEnd);
+        } catch (Throwable $e) {
+            $stats['failed'] += $pending->count();
+            if (!$dryRun) {
+                foreach ($pending as $watch) {
+                    $this->markHourlyFailed($watch, '读取前一小时消费日志失败，请检查 NewAPI 数据库连接和 logs 表');
+                }
+            }
+            Log::warning('管理员每小时超限预警读取日志失败', ['error' => $e->getMessage()]);
+
+            return;
+        }
+
+        $rows = [];
+        $hits = [];
+        foreach ($pending as $watch) {
+            $spent = (int) $usage->get($watch->token_id, 0);
+            // 「超过」采用严格大于，金额恰好等于限额时不发送。
+            if ($spent <= $watch->hourly_threshold_quota) {
+                $stats['skipped']++;
+                if (!$dryRun && $watch->last_hourly_error !== null) {
+                    $this->markHourlyFailed($watch, null);
+                }
+                continue;
+            }
+
+            $rows[] = [
+                'name' => $tokens->get($watch->token_id)->name,
+                'spent' => $spent,
+                'threshold' => (int) $watch->hourly_threshold_quota,
+            ];
+            $hits[] = $watch;
+        }
+
+        if ($rows === []) {
+            return;
+        }
+
+        if ($dryRun) {
+            $stats['admin_hourly_sent'] = count($rows);
+
+            return;
+        }
+
+        $result = $this->feishu->send(
+            $adminUrl,
+            AlertSetting::adminWebhookSecret(),
+            $this->feishu->adminHourlySummaryCard($rows, $hourStart, $hourEnd)
+        );
+
+        foreach ($hits as $index => $watch) {
+            if ($result['ok']) {
+                $watch->forceFill([
+                    'token_name' => $rows[$index]['name'],
+                    'last_hourly_notified_at' => Carbon::now(),
+                    'last_hourly_notified_hour' => $hourStart->timestamp,
+                    'last_hourly_notified_quota' => $rows[$index]['spent'],
+                    'last_hourly_error' => null,
+                    'last_hourly_error_at' => null,
+                ])->save();
+            } else {
+                $this->markHourlyFailed($watch, $result['error']);
+            }
+        }
+
+        if ($result['ok']) {
+            $stats['admin_hourly_sent'] = count($rows);
+        } else {
+            $stats['failed'] += count($rows);
+            Log::warning('管理员每小时超限预警推送失败', [
+                'count' => count($rows),
+                'error' => $result['error'],
+            ]);
+        }
+    }
+
+    private function markHourlyFailed(AlertAdminWatch $watch, ?string $error): void
+    {
+        if ($watch->last_hourly_error === $error) {
+            return;
+        }
+
+        $watch->forceFill([
+            'last_hourly_error' => $error,
+            'last_hourly_error_at' => $error === null ? null : Carbon::now(),
+        ])->save();
     }
 
     /**

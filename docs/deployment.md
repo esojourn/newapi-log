@@ -117,6 +117,10 @@ SQLite 的 `-wal` 文件变成 root 所有，之后网页端再写设置就写�
 
 调度频率由 `ALERT_CHECK_CRON` 决定（默认 `*/30 * * * *`，即每半小时一轮）。可选项：
 
+管理员「已监控的 Key」中的每小时超限预警也由这条调度检查，需至少每小时执行一次。
+它统计上一完整自然小时的消费，成功发送后按 Key 和小时去重，失败会在后续检查中重试，
+不受余额预警的复发间隔影响。更新此功能后需执行第 4 步的 alerts 库迁移；原有 Key 默认不开启小时预警。
+
 ```env
 ALERT_DB_DATABASE=             # SQLite 路径，留空用 database/alerts.sqlite
 ALERT_CHECK_CRON="*/30 * * * *"

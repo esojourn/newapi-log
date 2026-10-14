@@ -33,7 +33,8 @@ return [
     | 检查频率
     |--------------------------------------------------------------------------
     |
-    | Console\Kernel 里 alerts:check 的 cron 表达式。改完记得 php artisan config:clear。
+    | Console\Kernel 里 alerts:check 的 cron 表达式，同时检查余额与上一完整小时消费。
+    | 使用小时超限预警时需至少每小时执行一次。改完记得 php artisan config:clear。
     |
     */
     'schedule_cron' => env('ALERT_CHECK_CRON', '*/30 * * * *'),

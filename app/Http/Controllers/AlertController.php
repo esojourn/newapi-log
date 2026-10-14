@@ -159,6 +159,7 @@ class AlertController extends Controller
             'watchedIds' => $watches->pluck('token_id')->flip(),
             // token_id => 表单里显示的美元阈值，留空表示沿用全局默认
             'watchAmounts' => $watches->mapWithKeys(fn ($w) => [$w->token_id => $this->quotaToInputAmount($w->threshold_quota)]),
+            'hourlyWatchAmounts' => $watches->mapWithKeys(fn ($w) => [$w->token_id => $this->quotaToInputAmount($w->hourly_threshold_quota)]),
             'subscribedIds' => AlertSubscription::query()->where('enabled', true)->pluck('token_id')->flip(),
             'adminEnabled' => AlertSetting::adminEnabled(),
             'adminWebhookUrl' => AlertSetting::adminWebhookUrl(),
@@ -207,12 +208,35 @@ class AlertController extends Controller
             'watch.*' => 'integer',
             'threshold' => 'nullable|array',
             'threshold.*' => 'nullable|numeric|min:0|max:' . self::MAX_THRESHOLD_AMOUNT,
+            'hourly_settings_present' => 'sometimes|boolean',
+            'hourly_enabled' => 'nullable|array',
+            'hourly_enabled.*' => 'integer',
+            'hourly_threshold' => 'nullable|array',
+            'hourly_threshold.*' => $this->amountRules(),
         ]);
 
         // 列表是分页的，只处理本次提交的这批 id，其他页的勾选不受影响
         $pageIds = array_map('intval', $request->input('page_token_ids', []));
-        $checked = array_values(array_intersect(array_map('intval', $request->input('watch', [])), $pageIds));
+        $checked = array_values(array_intersect(array_map('intval', (array) $request->input('watch', [])), $pageIds));
         $thresholds = (array) $request->input('threshold', []);
+
+        // 只有「已监控」表单编辑小时预警；下方分页勾选不能覆盖已保存的小时设置。
+        $hasHourlySettings = $request->boolean('hourly_settings_present');
+        $hourlyEnabled = array_map('intval', (array) $request->input('hourly_enabled', []));
+        $hourlyThresholds = (array) $request->input('hourly_threshold', []);
+
+        if ($hasHourlySettings) {
+            $errors = [];
+            foreach (array_intersect($checked, $hourlyEnabled) as $tokenId) {
+                if ($this->nullableValue($hourlyThresholds, (string) $tokenId) === null) {
+                    $errors['hourly_threshold.' . $tokenId] = '启用每小时超限预警时，请填写该 Key 的每小时限额金额';
+                }
+            }
+
+            if ($errors !== []) {
+                return back()->withErrors($errors)->withInput();
+            }
+        }
 
         $names = DB::table('tokens')->whereIn('id', $pageIds)->pluck('name', 'id');
 
@@ -226,17 +250,30 @@ class AlertController extends Controller
             $raw = $thresholds[$tokenId] ?? null;
             $raw = ($raw === null || $raw === '') ? null : $raw;
 
-            AlertAdminWatch::updateOrCreate(
-                ['token_id' => $tokenId],
-                [
-                    'token_name' => $names[$tokenId] ?? ('#' . $tokenId),
-                    'threshold_quota' => $raw === null ? null : Quota::fromAmount((float) $raw),
-                    'last_notified_at' => null,
-                    'last_notified_quota' => null,
-                    'last_error' => null,
-                    'last_error_at' => null,
-                ]
-            );
+            $watch = AlertAdminWatch::firstOrNew(['token_id' => $tokenId]);
+            $watch->fill([
+                'token_name' => $names[$tokenId] ?? ('#' . $tokenId),
+                'threshold_quota' => $raw === null ? null : Quota::fromAmount((float) $raw),
+                'last_notified_at' => null,
+                'last_notified_quota' => null,
+                'last_error' => null,
+                'last_error_at' => null,
+            ]);
+
+            if ($hasHourlySettings) {
+                $hourlyAmount = $this->nullableValue($hourlyThresholds, (string) $tokenId);
+                $watch->fill([
+                    'hourly_alert_enabled' => in_array($tokenId, $hourlyEnabled, true),
+                    'hourly_threshold_quota' => $hourlyAmount === null ? null : Quota::fromAmount((float) $hourlyAmount),
+                ]);
+
+                if ($watch->isDirty(['hourly_alert_enabled', 'hourly_threshold_quota'])) {
+                    $watch->fill(['last_hourly_error' => null, 'last_hourly_error_at' => null]);
+                }
+            }
+
+            // 保存名单或修改限额不清空小时去重记录，同一时段成功发送后不重复提醒。
+            $watch->save();
         }
 
         return back()->with('status', sprintf('已更新监控名单：本页监控 %d 个，移除 %d 个', count($checked), count($removed)));
@@ -266,10 +303,11 @@ class AlertController extends Controller
         $stats = $checker->run();
 
         return back()->with('status', sprintf(
-            '检查完成：检查 %d，用户推送 %d，管理员推送 %d，跳过 %d，失败 %d',
+            '检查完成：检查 %d，用户推送 %d，管理员余额推送 %d，每小时超限推送 %d，跳过 %d，失败 %d',
             $stats['checked'],
             $stats['user_sent'],
             $stats['admin_sent'],
+            $stats['admin_hourly_sent'],
             $stats['skipped'],
             $stats['failed']
         ));

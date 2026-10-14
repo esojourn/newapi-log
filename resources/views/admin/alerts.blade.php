@@ -9,6 +9,8 @@
         body { background-color: #E7F8FF; }
         .alz-nav { background: white; border-bottom: 2px solid #1D93AB; box-shadow: 0 1px 3px rgba(29,147,171,0.1); }
         .alz-thead { background-color: #f0fafc; color: #0f5a6b; }
+        .alz-thead th { white-space: nowrap; }
+        .alz-watch-table { min-width: 1080px; }
         .alz-tr:hover { background-color: #e8f7fc; }
         .alz-link { color: #1D93AB; }
         .alz-link:hover { color: #0f5a6b; }
@@ -68,7 +70,8 @@
             <h2 class="text-lg font-semibold text-gray-800 mb-1">管理员通知设置</h2>
             <p class="text-xs text-gray-400 mb-5">
                 这套阈值与飞书地址只属于管理员，和用户各自在 /usage/alerts 里配的那套完全独立；
-                同一个 Key 可以两边同时监控。持续低于阈值时每 {{ $remindHours }} 小时提醒一次。
+                同一个 Key 可以两边同时监控。余额持续低于阈值时每 {{ $remindHours }} 小时提醒一次；
+                每小时超限预警在下方按 Key 单独启用，也使用这个飞书机器人。
             </p>
 
             <form method="POST" action="{{ route('admin.alerts.settings') }}" class="space-y-4">
@@ -125,7 +128,7 @@
                     <button type="submit" class="alz-btn-ghost">立即检查一次</button>
                 </form>
                 <span class="text-xs text-gray-400">
-                    「立即检查」会真实推送（用户侧和管理员侧都会发），等同于跑一次 <code>php artisan alerts:check</code>。
+                    按已保存的配置检查余额和前一小时消费，并发送符合条件的预警。
                 </span>
             </div>
         </div>
@@ -134,7 +137,12 @@
         <div class="bg-white rounded-lg shadow overflow-hidden">
             <div class="px-5 py-4 border-b">
                 <h2 class="text-lg font-semibold text-gray-800">已监控的 Key（{{ $watches->count() }}）</h2>
-                <p class="text-xs text-gray-400 mt-1">取消勾选并保存即可移出监控；阈值留空表示沿用上面的默认金额。</p>
+                <p class="text-xs text-gray-400 mt-1">取消勾选并保存即可移出监控；余额预警金额留空表示沿用上面的默认金额。</p>
+                <p class="text-xs text-gray-400 mt-1">
+                    每小时超限预警需单独启用并填写美元限额，统计上一完整自然小时（例如 14:00 检查 13:00–14:00，时区 {{ config('app.timezone') }}）。
+                    消费超过限额时发送飞书通知，同一小时成功发送后不重复提醒，无限额度 Key 也适用。
+                </p>
+                <p class="text-xs text-gray-400 mt-1 md:hidden">左右滑动表格可查看每小时预警设置与推送状态。</p>
             </div>
 
             @if ($watches->isEmpty())
@@ -142,15 +150,18 @@
             @else
                 <form method="POST" action="{{ route('admin.alerts.watches') }}">
                     @csrf
+                    <input type="hidden" name="hourly_settings_present" value="1">
                     <div class="overflow-x-auto">
-                        <table class="w-full text-sm">
+                        <table class="w-full text-sm alz-watch-table">
                             <thead class="alz-thead">
                                 <tr>
                                     <th class="px-4 py-3 text-left w-12">监控</th>
                                     <th class="px-4 py-3 text-left">Key 名称</th>
                                     <th class="px-4 py-3 text-right">当前余额</th>
-                                    <th class="px-4 py-3 text-left w-40">预警金额（$）</th>
-                                    <th class="px-4 py-3 text-left">上次推送</th>
+                                    <th class="px-4 py-3 text-left w-40">余额预警金额（$）</th>
+                                    <th class="px-4 py-3 text-left w-56">每小时超限预警</th>
+                                    <th class="px-4 py-3 text-left">余额上次推送</th>
+                                    <th class="px-4 py-3 text-left">超限上次推送</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y">
@@ -161,13 +172,13 @@
                                             <input type="checkbox" name="watch[]" value="{{ $watch->token_id }}" checked>
                                             <input type="hidden" name="page_token_ids[]" value="{{ $watch->token_id }}">
                                         </td>
-                                        <td class="px-4 py-3">
+                                        <td class="px-4 py-3 whitespace-nowrap">
                                             <a href="{{ route('admin.user.detail', ['tokenName' => $watch->token_name]) }}"
                                                 class="alz-link">{{ $watch->token_name }}</a>
                                             @if (!$t)
                                                 <span class="ml-2 text-xs text-red-500">Key 已不存在</span>
                                             @elseif ($t->unlimited_quota)
-                                                <span class="ml-2 text-xs text-yellow-600">无限额度，不预警</span>
+                                                <span class="ml-2 text-xs text-yellow-600">无限额度，不做余额预警</span>
                                             @endif
                                         </td>
                                         <td class="px-4 py-3 text-right">
@@ -177,7 +188,25 @@
                                             <input type="number" step="0.01" min="0"
                                                 name="threshold[{{ $watch->token_id }}]" class="alz-input w-32"
                                                 placeholder="{{ $adminDefaultAmount ?? $defaultAmount }}"
-                                                value="{{ $watchAmounts[$watch->token_id] ?? '' }}">
+                                                value="{{ old('threshold.' . $watch->token_id, $watchAmounts[$watch->token_id] ?? '') }}">
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            @php
+                                                $hourlyEnabled = old('hourly_settings_present')
+                                                    ? in_array($watch->token_id, (array) old('hourly_enabled', []))
+                                                    : $watch->hourly_alert_enabled;
+                                            @endphp
+                                            <label class="flex items-center gap-2 mb-2 whitespace-nowrap">
+                                                <input type="checkbox" name="hourly_enabled[]" value="{{ $watch->token_id }}"
+                                                    {{ $hourlyEnabled ? 'checked' : '' }}>
+                                                <span class="text-xs text-gray-600">启用每小时超限预警</span>
+                                            </label>
+                                            <label for="hourly_threshold_{{ $watch->token_id }}" class="text-xs text-gray-500">限额（$）</label>
+                                            <input type="number" step="0.01" min="0" max="100000"
+                                                id="hourly_threshold_{{ $watch->token_id }}"
+                                                name="hourly_threshold[{{ $watch->token_id }}]" class="alz-input w-32"
+                                                placeholder="手工填写限额"
+                                                value="{{ old('hourly_threshold.' . $watch->token_id, $hourlyWatchAmounts[$watch->token_id] ?? '') }}">
                                         </td>
                                         <td class="px-4 py-3 text-gray-500">
                                             @if ($watch->last_notified_at)
@@ -187,6 +216,17 @@
                                             @endif
                                             @if ($watch->last_error)
                                                 <div class="text-xs text-red-500">{{ $watch->last_error }}</div>
+                                            @endif
+                                        </td>
+                                        <td class="px-4 py-3 text-gray-500">
+                                            @if ($watch->last_hourly_notified_at)
+                                                {{ $watch->last_hourly_notified_at->format('m-d H:i') }}
+                                                <div class="text-xs">消费 {{ \App\Support\Quota::format((int) $watch->last_hourly_notified_quota) }}</div>
+                                            @else
+                                                <span class="text-gray-300">未推送</span>
+                                            @endif
+                                            @if ($watch->last_hourly_error)
+                                                <div class="text-xs text-red-500">{{ $watch->last_hourly_error }}</div>
                                             @endif
                                         </td>
                                     </tr>
@@ -245,11 +285,11 @@
                                                 {{ $watchedIds->has($token->id) ? 'checked' : '' }}>
                                             <input type="hidden" name="page_token_ids[]" value="{{ $token->id }}">
                                         </td>
-                                        <td class="px-4 py-3">
+                                        <td class="px-4 py-3 whitespace-nowrap">
                                             <a href="{{ route('admin.user.detail', ['tokenName' => $token->name]) }}"
                                                 class="alz-link">{{ $token->name }}</a>
                                             @if ($token->unlimited_quota)
-                                                <span class="ml-2 text-xs text-yellow-600">无限额度，不预警</span>
+                                                <span class="ml-2 text-xs text-yellow-600">无限额度，不做余额预警</span>
                                             @endif
                                         </td>
                                         <td class="px-4 py-3 text-right">

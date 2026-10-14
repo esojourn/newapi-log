@@ -6,7 +6,7 @@ use App\Services\AlertChecker;
 use Illuminate\Console\Command;
 
 /**
- * 余额预警检查，由 Console\Kernel 的 schedule 定时调用。
+ * 余额及每小时消费超限预警检查，由 Console\Kernel 的 schedule 定时调用。
  *
  *   php artisan alerts:check              正常跑一轮
  *   php artisan alerts:check --dry-run    只判定不发送，也不写去重记录
@@ -18,7 +18,7 @@ class CheckBalanceAlerts extends Command
                             {--dry-run : 只判定不发送}
                             {--token-id= : 只检查指定的 tokens.id}';
 
-    protected $description = '检查订阅 Key 的余额，低于阈值时推送飞书预警';
+    protected $description = '检查 Key 余额及前一小时消费，触发阈值时推送飞书预警';
 
     public function handle(AlertChecker $checker): int
     {
@@ -32,8 +32,8 @@ class CheckBalanceAlerts extends Command
         $stats = $checker->run($dryRun, $tokenId === null ? null : (int) $tokenId);
 
         $this->table(
-            ['检查', '用户推送', '管理员推送', '跳过', '失败'],
-            [[$stats['checked'], $stats['user_sent'], $stats['admin_sent'], $stats['skipped'], $stats['failed']]]
+            ['检查', '用户推送', '管理员余额推送', '每小时超限推送', '跳过', '失败'],
+            [[$stats['checked'], $stats['user_sent'], $stats['admin_sent'], $stats['admin_hourly_sent'], $stats['skipped'], $stats['failed']]]
         );
 
         // 有推送失败时给 cron / 调用方一个非零退出码
