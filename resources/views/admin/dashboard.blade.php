@@ -82,7 +82,7 @@
             <p class="text-xs text-gray-400 mb-4">
                 输入 Tokens 按缓存状态拆分（三段之和 = {{ $hourly ? '该时段' : '当日' }}总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
                 虚线显示请求数、实际消费金额和总 Tokens（输入含缓存 + 输出）。渠道与模型筛选共同作用于本图的所有数据。
-                蓝色折线显示单位成本（$/百万 Tokens）= 实际消费金额 ÷ 总 Tokens × 1,000,000；无 Tokens 的时段留空。
+                深棕色折线显示单位成本（$/百万 Tokens）= 实际消费金额 ÷ 总 Tokens × 1,000,000；无 Tokens 的时段留空。
                 <span id="cacheScopeLabel">全部渠道 · 全部模型</span> 区间内预估节省
                 <span id="cacheSavedAmount" class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
             </p>
@@ -451,7 +451,7 @@
                         label: '单位成本 ($/百万 Tokens)',
                         data: initialCache.unitCosts,
                         type: 'line',
-                        borderColor: '#2563EB',
+                        borderColor: '#854D0E',
                         backgroundColor: 'transparent',
                         borderWidth: 2,
                         tension: 0.3,
@@ -521,9 +521,9 @@
                         type: 'linear',
                         position: 'right',
                         beginAtZero: true,
-                        title: { display: true, text: '单位成本 ($/百万 Tokens)', color: '#2563EB' },
+                        title: { display: true, text: '单位成本 ($/百万 Tokens)', color: '#854D0E' },
                         grid: { drawOnChartArea: false },
-                        ticks: { color: '#2563EB', callback: v => '$' + fmtAmount(v) }
+                        ticks: { color: '#854D0E', callback: v => '$' + fmtAmount(v) }
                     }
                 }
             }
