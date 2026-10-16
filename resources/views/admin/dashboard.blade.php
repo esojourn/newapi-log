@@ -66,6 +66,46 @@
             </div>
         </div>
 
+        {{-- 缓存利用率趋势 --}}
+        <div class="bg-white rounded-lg shadow p-5">
+            <h2 class="text-lg font-semibold text-gray-800 mb-1">缓存利用率趋势</h2>
+            <div class="flex flex-wrap items-center gap-2 my-3">
+                <label for="cacheChannelFilter" class="text-sm text-gray-700">上游渠道</label>
+                <select id="cacheChannelFilter" class="max-w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md bg-white text-gray-700">
+                    <option value="">全部渠道</option>
+                    @foreach ($cacheChannels as $channel)
+                        <option value="{{ $channel['id'] }}">{{ $channel['name'] }}（#{{ $channel['id'] }}）</option>
+                    @endforeach
+                </select>
+                <span id="cacheFilterStatus" class="text-xs text-gray-500" role="status" aria-live="polite"></span>
+            </div>
+            <p class="text-xs text-gray-400 mb-4">
+                输入 Tokens 按缓存状态拆分（三段之和 = {{ $hourly ? '该时段' : '当日' }}总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
+                虚线显示请求数、实际消费金额和总 Tokens（输入含缓存 + 输出）。渠道与模型筛选共同作用于本图的所有数据。
+                蓝色折线显示单位成本（$/百万 Tokens）= 实际消费金额 ÷ 总 Tokens × 1,000,000；无 Tokens 的时段留空。
+                <span id="cacheScopeLabel">全部渠道 · 全部模型</span> 区间内预估节省
+                <span id="cacheSavedAmount" class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
+            </p>
+            <div class="overflow-x-auto">
+                <div class="relative" style="height: 300px; min-width: 800px;">
+                    <canvas id="cacheChart"></canvas>
+                </div>
+            </div>
+
+            {{-- 模型筛选（用量前 5 的模型） --}}
+            <div class="mt-4 flex flex-wrap gap-2">
+                <button type="button" data-model="" class="cache-model-btn px-3 py-1.5 text-sm border rounded-md alz-btn-active">
+                    全部模型
+                </button>
+                @foreach ($cacheModelNames as $model)
+                    <button type="button" data-model="{{ $model }}"
+                        class="cache-model-btn px-3 py-1.5 text-sm border rounded-md bg-white text-gray-700 border-gray-300 alz-btn-day">
+                        {{ $model }}
+                    </button>
+                @endforeach
+            </div>
+        </div>
+
         {{-- 数据表格 --}}
         <div class="bg-white rounded-lg shadow overflow-hidden">
             <div class="px-5 py-4 border-b">
@@ -128,45 +168,6 @@
             <p class="text-xs text-gray-400 mb-4">折线显示 Top 10 用户的 Token 用量，柱图显示全部用户的总金额。</p>
             <div class="relative" style="height: 300px;">
                 <canvas id="lineChart"></canvas>
-            </div>
-        </div>
-
-        {{-- 缓存利用率趋势 --}}
-        <div class="bg-white rounded-lg shadow p-5">
-            <h2 class="text-lg font-semibold text-gray-800 mb-1">缓存利用率趋势</h2>
-            <div class="flex flex-wrap items-center gap-2 my-3">
-                <label for="cacheChannelFilter" class="text-sm text-gray-700">上游渠道</label>
-                <select id="cacheChannelFilter" class="max-w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md bg-white text-gray-700">
-                    <option value="">全部渠道</option>
-                    @foreach ($cacheChannels as $channel)
-                        <option value="{{ $channel['id'] }}">{{ $channel['name'] }}（#{{ $channel['id'] }}）</option>
-                    @endforeach
-                </select>
-                <span id="cacheFilterStatus" class="text-xs text-gray-500" role="status" aria-live="polite"></span>
-            </div>
-            <p class="text-xs text-gray-400 mb-4">
-                输入 Tokens 按缓存状态拆分（三段之和 = {{ $hourly ? '该时段' : '当日' }}总输入）。缓存读取按折扣计费，缓存写入通常按 1.25 倍计费。
-                虚线显示请求数、实际消费金额和总 Tokens（输入含缓存 + 输出）。渠道与模型筛选共同作用于本图的所有数据。
-                <span id="cacheScopeLabel">全部渠道 · 全部模型</span> 区间内预估节省
-                <span id="cacheSavedAmount" class="font-semibold" style="color:#1D93AB;">${{ number_format($overview->cache_saved_amount, 4) }}</span>。
-            </p>
-            <div class="overflow-x-auto">
-                <div class="relative" style="height: 300px; min-width: 640px;">
-                    <canvas id="cacheChart"></canvas>
-                </div>
-            </div>
-
-            {{-- 模型筛选（用量前 5 的模型） --}}
-            <div class="mt-4 flex flex-wrap gap-2">
-                <button type="button" data-model="" class="cache-model-btn px-3 py-1.5 text-sm border rounded-md alz-btn-active">
-                    全部模型
-                </button>
-                @foreach ($cacheModelNames as $model)
-                    <button type="button" data-model="{{ $model }}"
-                        class="cache-model-btn px-3 py-1.5 text-sm border rounded-md bg-white text-gray-700 border-gray-300 alz-btn-day">
-                        {{ $model }}
-                    </button>
-                @endforeach
             </div>
         </div>
     </div>
@@ -353,7 +354,7 @@
             }
         });
 
-        // 缓存利用率趋势：输入 Tokens 按缓存状态堆叠 + 命中率、请求数、金额和总 Tokens 折线
+        // 缓存利用率趋势：输入 Tokens 按缓存状态堆叠 + 命中率、请求数、金额、总 Tokens 和单位成本折线
         const cacheData = @json($dailyCacheData);
         const fmtTokens = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v;
         const fmtAmount = v => v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
@@ -375,7 +376,8 @@
             const requests = dates.map(date => source.request_count[date] ?? 0);
             const amounts = dates.map(date => source.amounts[date] ?? 0);
             const totalTokens = dates.map(date => source.total_tokens[date] ?? 0);
-            return { read, write, miss, rate, requests, amounts, totalTokens };
+            const unitCosts = totalTokens.map((tokens, i) => tokens > 0 ? amounts[i] / tokens * 1e6 : null);
+            return { read, write, miss, rate, requests, amounts, totalTokens, unitCosts };
         }
 
         const initialCache = cacheSeries(cacheData);
@@ -444,6 +446,19 @@
                         yAxisID: 'y',
                         order: 0,
                         pointRadius: 2,
+                    },
+                    {
+                        label: '单位成本 ($/百万 Tokens)',
+                        data: initialCache.unitCosts,
+                        type: 'line',
+                        borderColor: '#2563EB',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        yAxisID: 'y4',
+                        order: 0,
+                        pointRadius: 2,
+                        spanGaps: false,
                     }
                 ]
             },
@@ -461,6 +476,8 @@
                                 ? `${ctx.dataset.label}: ${ctx.raw.toLocaleString()} 次`
                                 : ctx.dataset.yAxisID === 'y3'
                                 ? `${ctx.dataset.label}: $${fmtAmount(ctx.raw)}`
+                                : ctx.dataset.yAxisID === 'y4'
+                                ? `${ctx.dataset.label}: ${ctx.raw === null ? '-' : '$' + fmtAmount(ctx.raw) + ' / 百万 Tokens'}`
                                 : `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}`
                         }
                     }
@@ -499,6 +516,14 @@
                         title: { display: true, text: '金额 ($)', color: '#EA580C' },
                         grid: { drawOnChartArea: false },
                         ticks: { color: '#EA580C', callback: v => '$' + v.toFixed(2) }
+                    },
+                    y4: {
+                        type: 'linear',
+                        position: 'right',
+                        beginAtZero: true,
+                        title: { display: true, text: '单位成本 ($/百万 Tokens)', color: '#2563EB' },
+                        grid: { drawOnChartArea: false },
+                        ticks: { color: '#2563EB', callback: v => '$' + fmtAmount(v) }
                     }
                 }
             }
@@ -529,6 +554,7 @@
             cacheChart.data.datasets[4].data = series.requests;
             cacheChart.data.datasets[5].data = series.amounts;
             cacheChart.data.datasets[6].data = series.totalTokens;
+            cacheChart.data.datasets[7].data = series.unitCosts;
             cacheChart.update();
 
             const channelLabel = channel ? cacheChannelFilter.selectedOptions[0].textContent : '全部渠道';
