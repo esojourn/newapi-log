@@ -386,6 +386,8 @@
         const cacheMiss = initialCache.miss;
         const cacheHitRate = initialCache.rate;
 
+        // 提示框优先显示单位成本、命中率、总金额、总 Tokens，其后保留其余指标。
+        const cacheTooltipOrder = [7, 3, 5, 6, 4, 0, 1, 2];
         const cacheChart = new Chart(document.getElementById('cacheChart'), {
             type: 'bar',
             data: {
@@ -469,6 +471,7 @@
                 plugins: {
                     legend: { position: 'top' },
                     tooltip: {
+                        itemSort: (a, b) => cacheTooltipOrder.indexOf(a.datasetIndex) - cacheTooltipOrder.indexOf(b.datasetIndex),
                         callbacks: {
                             label: ctx => ctx.dataset.yAxisID === 'y1'
                                 ? `${ctx.dataset.label}: ${ctx.raw === null ? '-' : ctx.raw + '%'}`

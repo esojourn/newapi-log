@@ -562,7 +562,7 @@ class StatsController extends Controller
             $modelCacheSaved[$model] = $this->quotaToAmount((int) round($quota));
         }
 
-        // 渠道信息仅在管理员仪表盘加载；只读 ID 和名称，不读取上游密钥。
+        // 渠道信息仅在管理员仪表盘加载；只读 ID、名称和排序字段，不读取上游密钥。
         // 从日志取 ID，保留已删除渠道的历史统计，也不限制为用量前几名。
         $cacheChannelIds = DB::table('logs')
             ->where('created_at', '>=', $sinceTimestamp)
@@ -573,8 +573,13 @@ class StatsController extends Controller
             ->pluck('channel_id');
         $channelNames = $cacheChannelIds->isEmpty()
             ? collect()
-            : DB::table('channels')->whereIn('id', $cacheChannelIds)->pluck('name', 'id');
-        $cacheChannels = $cacheChannelIds->map(fn ($id) => [
+            : DB::table('channels')->whereIn('id', $cacheChannelIds)
+                ->orderByRaw('COALESCE(priority, 0) DESC')
+                ->orderByRaw('COALESCE(weight, 0) DESC')
+                ->orderBy('id')->pluck('name', 'id');
+        // 优先级、权重从高到低，同配置按 ID 排序；已删除渠道排在末尾。
+        $orderedChannelIds = $channelNames->keys()->concat($cacheChannelIds->diff($channelNames->keys()));
+        $cacheChannels = $orderedChannelIds->map(fn ($id) => [
             'id' => (int) $id,
             'name' => $channelNames->get($id) ?: '已删除或未命名渠道',
         ])->all();

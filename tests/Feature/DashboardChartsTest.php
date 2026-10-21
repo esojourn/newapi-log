@@ -55,6 +55,8 @@ class DashboardChartsTest extends TestCase
         Schema::connection('dashboard_test')->create('channels', function (Blueprint $table) {
             $table->integer('id')->primary();
             $table->string('name');
+            $table->bigInteger('priority')->nullable()->default(0);
+            $table->integer('weight')->nullable()->default(0);
             $table->string('key')->default('upstream-api-secret');
         });
         Schema::connection('dashboard_test')->create('tokens', function (Blueprint $table) {
@@ -195,6 +197,28 @@ class DashboardChartsTest extends TestCase
             ['id' => 9, 'name' => '已删除或未命名渠道'],
         ], $response->viewData('cacheChannels'));
         $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
+    }
+
+    public function test_admin_channel_options_sort_by_priority_then_weight_with_deleted_channels_last(): void
+    {
+        DB::table('channels')->insert([
+            ['id' => 7, 'name' => '低优先级', 'priority' => -1, 'weight' => 100],
+            ['id' => 8, 'name' => '高优先级低权重', 'priority' => 10, 'weight' => 1],
+            ['id' => 9, 'name' => '高优先级高权重', 'priority' => 10, 'weight' => 50],
+            ['id' => 10, 'name' => '同优先级同权重', 'priority' => 10, 'weight' => 50],
+            ['id' => 11, 'name' => '默认排序配置', 'priority' => null, 'weight' => null],
+            ['id' => 12, 'name' => '零优先级', 'priority' => 0, 'weight' => 0],
+            ['id' => 13, 'name' => '时段内无日志', 'priority' => 100, 'weight' => 100],
+        ]);
+        foreach ([6, 7, 8, 9, 10, 11, 12, 14] as $id) {
+            $this->insertLog(Carbon::parse('2026-09-10 12:15:00'), 'user', 'model', 500000, 100, $id);
+        }
+
+        $response = $this->withSession(['admin_authenticated' => true])
+            ->get('/admin?at=2026-09-10T12:00')->assertOk();
+
+        $this->assertSame([9, 10, 8, 11, 12, 7, 6, 14], array_column($response->viewData('cacheChannels'), 'id'));
+        $response->assertSeeInOrder(array_map(fn ($id) => '<option value="' . $id . '">', [9, 10, 8, 11, 12, 7, 6, 14]), false);
     }
 
     /** @dataProvider trendRanges */
